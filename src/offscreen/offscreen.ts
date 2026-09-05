@@ -1,3 +1,4 @@
+import { isBackground, providerFetch } from "../core/security";
 /**
  * Offscreen document.
  *
@@ -38,11 +39,12 @@ const RING_SIZE = 64;
 // SW (the true owner) can respond.
 const OWNED_KINDS = new Set(["ping", "open_stream", "abort_stream", "peek_stream", "play_sound"]);
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   const kind = (msg as { kind?: string } | null)?.kind;
   if (!kind || !OWNED_KINDS.has(kind)) {
     return false; // not ours; let another listener (the SW) handle it
   }
+  if (!isBackground(sender)) return false;
   void handle(msg)
     .then((resp) => sendResponse({ ok: true, data: resp }))
     .catch((e) => sendResponse({ ok: false, error: (e as Error).message }));
@@ -114,7 +116,7 @@ async function runStream(
 
   let resp: Response;
   try {
-    resp = await fetch(url, { method: "POST", headers, body, signal });
+    resp = await providerFetch(url, { method: "POST", headers, body, signal });
   } catch (e) {
     if (signal.aborted) {
       void sendEnd(streamKey);

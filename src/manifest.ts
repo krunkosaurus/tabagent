@@ -8,7 +8,7 @@ import type { Manifest } from "./manifest-type";
 const manifest: Manifest = {
   manifest_version: 3,
   name: "TabAgent",
-  version: "0.1.5",
+  version: "0.1.7",
   description:
     "Universal AI browser agent. Connect any OpenAI-compatible provider (Z.AI coding plan, OpenAI, OpenRouter, Ollama, ...) and let the AI drive the active tab.",
   minimum_chrome_version: "120",
@@ -36,8 +36,6 @@ const manifest: Manifest = {
     "offscreen",
     "storage",
     "alarms", // heartbeat for the agent-loop survival layer
-    "contextMenus",
-    "commands",
     "scripting",
     "activeTab",
     "debugger", // CDP-required: real AX tree, screenshots, trusted input
@@ -47,29 +45,8 @@ const manifest: Manifest = {
   optional_host_permissions: ["https://*/*", "http://*/*"],
   host_permissions: [], // none required at install
   content_security_policy: {
-    extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'",
+    extension_pages: "script-src 'self'; object-src 'none'; base-uri 'none'; frame-src 'none'; img-src 'self' data:; font-src 'self'; style-src 'self' 'unsafe-inline'; form-action 'none'",
   },
-  web_accessible_resources: [
-    {
-      // sounds/notification.mp3 is fetched by the offscreen doc via
-      // chrome.runtime.getURL("sounds/notification.mp3"); listing it here keeps
-      // that fetch off the extension_pages CSP allowlist.
-      resources: ["offscreen.html", "sounds/*"],
-      matches: ["<all_urls>"],
-    },
-  ],
-  // Selection-triggered suggestion menu. Injected at document_idle so it doesn't
-  // slow page load. Only runs where we have host access; on tabs without it the
-  // script simply doesn't inject (graceful no-op).
-  content_scripts: [
-    {
-      matches: ["<all_urls>"],
-      js: ["selection.js"],
-      css: ["selection.css"],
-      run_at: "document_idle",
-      all_frames: false,
-    },
-  ],
   commands: {
     "_execute_action": {
       suggested_key: { default: "Ctrl+Shift+Y", mac: "Command+Shift+Y" },

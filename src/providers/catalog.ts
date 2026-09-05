@@ -256,7 +256,6 @@ export const OPENROUTER_PROVIDER: ProviderDefinition = {
   authFields: [
     { key: "apiKey", label: "OpenRouter API Key", type: "password", required: true },
   ],
-  extraHeaders: { "HTTP-Referer": "https://github.com", "X-Title": "TabAgent" },
   defaultLargeModelId: "anthropic/claude-3.5-sonnet",
   models: [], // fully dynamic via /models
   docsUrl: "https://openrouter.ai/docs",
@@ -443,8 +442,6 @@ export const HUGGINGFACE_PROVIDER: ProviderDefinition = {
   authFields: [
     { key: "apiKey", label: "HF Token", type: "password", required: true },
   ],
-  // OpenRouter-style attribution headers; localized to TabAgent (see OPENROUTER_PROVIDER).
-  extraHeaders: { "HTTP-Referer": "https://github.com", "X-Title": "TabAgent" },
   defaultLargeModelId: "zai-org/GLM-5.2:fireworks-ai",
   defaultSmallModelId: "deepseek-ai/DeepSeek-V4-Flash:fireworks-ai",
   models: [], // fully dynamic via /models

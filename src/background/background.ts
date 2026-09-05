@@ -1,10 +1,11 @@
+import { isExtensionPage, isSelectionSender, providerURL } from "../core/security";
 /**
  * Service worker entry.
  *
  * Wires:
  *   - chrome.runtime.onMessage: the panel <-> SW request/response router.
  *   - chrome.alarms heartbeat: re-arms the loop if the SW was killed during a run.
- *   - chrome.runtime.onStartup / onInstalled: rehydrate sessions from the local mirror.
+ *   - chrome.runtime.onStartup / onInstalled: recover checkpoints within the current browser session.
  *   - chrome.tabs.onRemoved / chrome.debugger.onDetach: clean teardown.
  *   - chrome.action click / commands: open the side panel.
  *
@@ -18,12 +19,11 @@
 import {
   initStorageAccess,
   listActiveSessions,
-  listActiveSessionsLocal,
   loadSession,
-  loadSessionLocal,
   loadSettings,
   readProviderCredentials,
   saveSettings,
+  saveProviderModels,
   unlockCredentials,
   writeEncryptedCredentials,
   loadMemory,
@@ -60,11 +60,8 @@ const STALE_MS = 120_000;
 // ---------------------------------------------------------------------------
 // Selection-triggered suggestion: pending prompts awaiting panel boot.
 //
-// When the content-script menu fires selection_action, the SW opens the side
-// panel and starts the run. Opening the panel reboots its document, so we also
-// stash the prompt here: the panel, on boot, asks pop_pending_prompt and, if a
-// prompt is waiting, auto-sends it. This covers the newly-opened-panel case;
-// startSessionForSelection below covers the already-open-panel case.
+// Content selections only fill a draft in the panel. Only pressing Send in
+// the trusted panel starts a run.
 // ---------------------------------------------------------------------------
 
 const pendingPrompts = new Map<number, { prompt: string; at: number }>();
@@ -116,30 +113,6 @@ function isForgetEverythingIntent(text: string): boolean {
   return arVerb.test(t) && arScope.test(t);
 }
 
-/**
- * Start (or enqueue into) the agent run for a selection action. Mirrors the
- * send_message handler's find-or-create + busy-routing logic, but takes the
- * prompt directly instead of from a request field.
- */
-async function startSessionForSelection(tabId: number, prompt: string): Promise<void> {
-  const settings = await loadSettings();
-  if (!settings.providerId || !settings.modelId) {
-    // Provider not connected -- leave the prompt pending for the panel; the
-    // user will be prompted to connect there.
-    return;
-  }
-  const sessions = await listActiveSessions();
-  let session = sessions.find((s) => s.tabId === tabId);
-  if (!session || session.state === "done" || session.state === "error") {
-    session = await newSession(tabId, settings.providerId, settings.modelId);
-  }
-  if (isBusy(session)) {
-    await enqueueMessage(session.sessionId, prompt);
-  } else {
-    void run(session.sessionId, prompt);
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
@@ -149,9 +122,6 @@ async function startSessionForSelection(tabId: number, prompt: string): Promise<
 // instant module evaluation finishes, which may be BEFORE bootstrap()'s
 // unlockCredentials() has populated the working copy. Without this gate, a
 // returning user's first list_models/connect could read empty creds.
-let readyResolve: () => void;
-const ready = new Promise<void>((r) => (readyResolve = r));
-
 async function bootstrap(): Promise<void> {
   await initStorageAccess();
   await ensureAlarm();
@@ -159,10 +129,10 @@ async function bootstrap(): Promise<void> {
   // Auto-unlock: decrypt any stored credentials into the session working copy
   // using the stored master key. No user interaction required.
   await unlockCredentials().catch((e) => console.error("[bootstrap] unlock failed:", e));
-  readyResolve();
 }
 
-void bootstrap();
+const ready = bootstrap();
+void ready.catch((e) => console.error("Storage initialization failed", e));
 
 async function ensureAlarm(): Promise<void> {
   const existing = await chrome.alarms.get(HEARTBEAT_ALARM);
@@ -202,9 +172,9 @@ chrome.runtime.onStartup.addListener(() => void rehydrate());
 chrome.runtime.onInstalled.addListener(() => void rehydrate());
 
 async function rehydrate(): Promise<void> {
-  // storage.session is empty after a browser restart; the local mirror holds
-  // the last-known session states. Mark any non-idle session for recovery.
-  const mirror = await listActiveSessionsLocal();
+  await ready;
+  // Only resume within the current browser session. No disk transcript mirror.
+  const mirror = await listActiveSessions();
   for (const s of mirror) {
     if (s.debuggerAttached) s.debuggerAttached = false;
     if (["idle", "done", "paused"].includes(s.state)) continue;
@@ -235,6 +205,7 @@ chrome.alarms?.onAlarm?.addListener((alarm) => {
 });
 
 async function heartbeat(): Promise<void> {
+  await ready;
   const sessions = await listActiveSessions();
   const now = Date.now();
   for (const s of sessions) {
@@ -255,12 +226,26 @@ async function heartbeat(): Promise<void> {
 // Message router: panel -> SW
 // ---------------------------------------------------------------------------
 
+const PANEL_REQUEST_KINDS = new Set([
+  "list_providers", "list_models", "seed_models", "validate_token", "connect_provider", "get_provider_connection",
+  "select_model", "set_autonomy", "set_notifications", "set_theme", "get_memory",
+  "set_memory", "delete_memory", "export_session", "send_message", "stop", "pause",
+  "resume", "permission_decision", "plan_decision", "resume_interrupted", "get_state",
+  "open_side_panel_for_tab", "new_session", "selection_action", "pop_pending_prompt",
+]);
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  const kind = msg?.kind;
+  // Ignore events and offscreen messages so their owning listener can answer.
+  if (typeof kind !== "string" || !PANEL_REQUEST_KINDS.has(kind)) return false;
+  const trusted = isExtensionPage(sender, ["panel.html", "popup.html"]);
+  if (!trusted && !(kind === "selection_action" && isSelectionSender(sender))) {
+    sendResponse({ ok: false, error: "Untrusted message sender" });
+    return false;
+  }
   void (async () => {
-    // Wait for bootstrap (storage access + credential unlock) before serving,
-    // so credential-dependent requests don't race the boot.
-    await ready;
     try {
+      await ready;
       const data = await handlePanelRequest(msg as PanelRequest, sender);
       sendResponse({ ok: true, data });
     } catch (e) {
@@ -275,6 +260,14 @@ async function handlePanelRequest(req: PanelRequest, sender: chrome.runtime.Mess
     case "list_providers":
       return { providers: BUILTIN_PROVIDERS };
 
+    case "get_provider_connection": {
+      const def = getProviderDefinition(req.providerId);
+      if (!def) throw new Error("unknown provider");
+      const saved = await readProviderCredentials(req.providerId);
+      // Only return editable non-secret fields. Never send a saved API key to UI.
+      return { baseURL: saved.baseURL || def.baseURL, hasSavedKey: !!saved.apiKey };
+    }
+
     case "list_models": {
       const def = getProviderDefinition(req.providerId);
       if (!def) throw new Error("unknown provider");
@@ -282,6 +275,7 @@ async function handlePanelRequest(req: PanelRequest, sender: chrome.runtime.Mess
       const ctx = buildContext(def, creds);
       const adapter = getAdapter(def.type);
       const result = await adapter.listModels(ctx);
+      await saveProviderModels(req.providerId, result.models);
       return { models: result.models };
     }
 
@@ -301,6 +295,7 @@ async function handlePanelRequest(req: PanelRequest, sender: chrome.runtime.Mess
       const def = getProviderDefinition(req.providerId);
       if (!def) throw new Error("unknown provider");
       const ctx = buildContext(def, req.credentials);
+      await requireProviderPermission(ctx.baseURL);
       const adapter = getAdapter(def.type);
       const result = await adapter.validateCredentials(ctx);
       return result; // { ok, error? }
@@ -309,14 +304,28 @@ async function handlePanelRequest(req: PanelRequest, sender: chrome.runtime.Mess
     case "connect_provider": {
       const def = getProviderDefinition(req.providerId);
       if (!def) throw new Error("unknown provider");
+      if ((await listActiveSessions()).some((s) => s.providerId === req.providerId && isBusy(s))) {
+        throw new Error("Stop the current agent run before editing this connection.");
+      }
+      const previous = await readProviderCredentials(req.providerId);
+      const credentials = { ...req.credentials };
+      if (req.keepSavedKey && !credentials.apiKey && previous.apiKey) {
+        const oldURL = buildContext(def, previous).baseURL;
+        const newURL = buildContext(def, credentials).baseURL;
+        if (oldURL !== newURL) {
+          throw new Error("The server address changed. Enter an API key for the new server, or choose 'Use without an API key'.");
+        }
+        credentials.apiKey = previous.apiKey;
+      }
       // NOTE: host-permission request is intentionally NOT here.
       // chrome.permissions.request() must run inside a user-gesture call stack,
       // and crossing a sendMessage boundary (panel -> SW) loses the gesture.
       // The panel requests the host permission BEFORE sending connect_provider.
       // Here we validate (real auth check) + persist.
-      const ctx = buildContext(def, req.credentials);
+      const ctx = buildContext(def, credentials);
       const adapter = getAdapter(def.type);
       // Validate FIRST. Don't persist a bad key.
+      await requireProviderPermission(ctx.baseURL);
       const validation = await adapter.validateCredentials(ctx);
       if (!validation.ok) {
         throw new Error(validation.error ?? "validation failed");
@@ -325,9 +334,12 @@ async function handlePanelRequest(req: PanelRequest, sender: chrome.runtime.Mess
       // Persist credentials (encrypted at rest with the auto-generated master key).
       const { readWorkingCredentials } = await import("../core/storage");
       const all = await readWorkingCredentials();
-      all[req.providerId] = req.credentials;
+      all[req.providerId] = credentials;
       await writeEncryptedCredentials(all);
-      const selectedModelId = def.defaultLargeModelId || models[0]?.id || "";
+      await saveProviderModels(req.providerId, models);
+      const settings = await loadSettings();
+      const selectedModelId = (settings.providerId === req.providerId && models.find((m) => m.id === settings.modelId)?.id)
+        || models.find((m) => m.id === def.defaultLargeModelId)?.id || models[0]?.id || "";
       await saveSettings({ providerId: req.providerId, modelId: selectedModelId, initialized: true });
       return { models, selectedModelId };
     }
@@ -337,6 +349,7 @@ async function handlePanelRequest(req: PanelRequest, sender: chrome.runtime.Mess
       return { ok: true };
 
     case "set_autonomy":
+      if (!["ask", "auto"].includes(req.mode)) throw new Error("Invalid autonomy mode");
       await saveSettings({ autonomyMode: req.mode });
       return { ok: true, mode: req.mode };
 
@@ -366,23 +379,13 @@ async function handlePanelRequest(req: PanelRequest, sender: chrome.runtime.Mess
     }
 
     case "export_session": {
-      // Debug export: return the full Session so the panel can download it as
-      // JSON. No credentials live on Session, so this is safe to hand to the
-      // user. We try every storage path so the export works even after a SW
-      // restart (session area is wiped on restart -- the local mirror is the
-      // crash-recovery source) and even if the panel never captured a sessionId.
+      // Explicit user export of the current in-memory conversation.
       let session: Session | null = null;
       // 1. Exact sessionId the panel already tracks (live session area).
       if (req.sessionId) session = (await loadSession(req.sessionId)) ?? null;
-      // 2. Exact sessionId in the local mirror (survives SW/browser restart).
-      if (!session && req.sessionId) session = (await loadSessionLocal(req.sessionId)) ?? null;
       // 3. Any active session for this tab (session area).
       if (!session) {
         session = (await listActiveSessions()).find((s) => s.tabId === req.tabId) ?? null;
-      }
-      // 4. Any session for this tab in the local mirror (post-restart).
-      if (!session) {
-        session = (await listActiveSessionsLocal()).find((s) => s.tabId === req.tabId) ?? null;
       }
       return { session };
     }
@@ -435,15 +438,15 @@ async function handlePanelRequest(req: PanelRequest, sender: chrome.runtime.Mess
     case "permission_decision": {
       // Map the wire decision shape to the permission service's Decision type.
       if (req.decision === "allow" || req.decision === "deny") {
-        permissions.resolve(req.toolCallId, req.decision);
+        permissions.resolve(req.toolCallId, req.decision, req.sessionId);
       } else {
-        permissions.resolve(req.toolCallId, req.decision);
+        permissions.resolve(req.toolCallId, req.decision, req.sessionId);
       }
       return { ok: true };
     }
 
     case "plan_decision": {
-      planService.resolve(req.planId, req.decision);
+      planService.resolve(req.planId, req.decision, req.sessionId);
       return { ok: true };
     }
 
@@ -494,20 +497,17 @@ async function handlePanelRequest(req: PanelRequest, sender: chrome.runtime.Mess
       // From the content script. The tab id is the SENDER's tab, not a field.
       const tabId = sender.tab?.id;
       if (tabId == null) throw new Error("selection_action: no sender tab");
+      if (typeof req.text !== "string" || !["explain", "summarize", "translate", "rewrite", "ask"].includes(req.action)) throw new Error("Invalid selection");
       const prompt = buildSelectionPrompt(req.action, req.text);
-      // Remember the prompt so the panel can auto-send it once it finishes
-      // booting (opening the panel reboots its document).
+      // Keep the draft until the panel has booted.
       pendingPrompts.set(tabId, { prompt, at: Date.now() });
       // Open the side panel for this tab.
       await chrome.sidePanel.open({ tabId }).catch(() => {});
       await chrome.sidePanel
         .setOptions({ tabId, path: "panel.html", enabled: true })
         .catch(() => {});
-      // Also kick off the run now -- this covers the case where the panel is
-      // ALREADY open (its document won't reboot, so pop_pending_prompt won't
-      // fire). If the panel is newly opened, this run still happens and the
-      // panel picks up the streaming events via its existing listener.
-      await startSessionForSelection(tabId, prompt);
+      // A content script can only suggest a draft, never start an agent run.
+      await broadcast({ kind: "selection_draft", tabId }).catch(() => {});
       return { ok: true };
     }
 
@@ -653,6 +653,8 @@ permissions.onPendingChange((req) => {
       name: req.name,
       input: req.input,
       reason: req.reason,
+      site: req.site,
+      alwaysAsk: req.alwaysAsk,
     })
     .catch(() => {});
 });
@@ -673,3 +675,10 @@ dialogHandler.onDialog((info) => {
 });
 
 console.log("[background] service worker booted");
+
+async function requireProviderPermission(baseURL: string): Promise<void> {
+  const url = providerURL(baseURL);
+  if (!await chrome.permissions.contains({ origins: [`${url.protocol}//${url.hostname}/*`] })) {
+    throw new Error("Connect this provider from the panel to grant network access first.");
+  }
+}

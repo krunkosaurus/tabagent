@@ -4,10 +4,10 @@
  * When the user selects text on a page, a small floating menu appears near the
  * selection offering preset actions (Explain, Summarize, Translate, Rewrite,
  * Ask…). Clicking an action messages the service worker, which opens the side
- * panel and runs the agent with a prefixed prompt built from the selection.
+ * panel with a draft prompt built from the selection. The user must press Send.
  *
  * Design notes:
- *   - Runs in the isolated world (content script). Cannot be touched by page JS.
+ *   - Runs in the isolated world (content script). Page events are untrusted; only trusted clicks prepare drafts.
  *   - The menu is rendered in a Shadow DOM attached to documentElement so page
  *     CSS never leaks in and SPA body re-renders don't blow it away.
  *   - Appended to documentElement (not body) so it survives SPAs that replace
@@ -48,7 +48,7 @@ function getMenu(): MenuElements {
   host.style.all = "initial"; // defeat any inherited styles
   // Appended to documentElement so SPAs that swap document.body don't drop us.
   document.documentElement.appendChild(host);
-  const root = host.attachShadow({ mode: "open" });
+  const root = host.attachShadow({ mode: "closed" });
   root.innerHTML = STYLE;
   const box = root.querySelector(".ai-box") as HTMLElement;
   const askInput = root.querySelector(".ai-ask-input") as HTMLInputElement;
@@ -66,7 +66,8 @@ function wireMenu(m: MenuElements): void {
   // Action buttons: each carries data-action.
   m.root.querySelectorAll<HTMLButtonElement>("[data-action]").forEach((btn) => {
     btn.addEventListener("mousedown", (e) => e.preventDefault()); // keep selection
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", (e) => {
+      if (!e.isTrusted) return;
       const action = btn.dataset.action as SelectionAction | undefined;
       if (!action) return;
       if (action === "ask") {
@@ -83,6 +84,7 @@ function wireMenu(m: MenuElements): void {
 
   // Ask input: send on Enter, close on Escape.
   m.askInput.addEventListener("keydown", (e) => {
+    if (!e.isTrusted) return;
     if (e.key === "Enter") {
       e.preventDefault();
       const q = m.askInput.value.trim();

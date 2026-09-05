@@ -30,14 +30,23 @@ pnpm-debug.log*
 
 # Environment
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
+!.env.*.example
 
 # Secrets / keys (safety net)
 *.pem
 *.key
 secrets.json
 credentials.json
+
+# Local conversation exports and browser/test data
+conversation-*.json
+*.har
+playwright-report/
+test-results/
+browser-profile/
+TabAgent-*.zip
 
 # Coverage
 coverage/

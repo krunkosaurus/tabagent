@@ -1,3 +1,4 @@
+import { providerFetch } from "../core/security";
 /**
  * OpenAI-compatible provider adapter.
  *
@@ -57,7 +58,7 @@ export const OpenAICompatAdapter: ProviderAdapter = {
 
     let resp: Response;
     try {
-      resp = await fetch(url, { method: "GET", headers });
+      resp = await providerFetch(url, { method: "GET", headers, signal: AbortSignal.timeout(15_000) });
     } catch (e) {
       // Network error (CORS, offline, provider unreachable). Fall back to seed.
       if (ctx.seedModels?.length) return { models: withProvider(ctx.seedModels, ctx.providerId) };
@@ -98,11 +99,8 @@ export const OpenAICompatAdapter: ProviderAdapter = {
   },
 
   async validateCredentials(ctx): Promise<ValidateResult> {
-    // Validate by sending a single-token NON-STREAMING chat completion.
-    // We deliberately do NOT use /models here: several providers (notably
-    // Z.AI's coding plan) return 401 on /models even with a valid chat key,
-    // so /models is a false-negative for validity. A 1-token completion is the
-    // actual operation the agent performs, so it's a true end-to-end check.
+    // Validate with model discovery unless the provider explicitly requires a
+    // chat probe (Z.AI can return 401 on /models with a valid chat credential).
     const key = ctx.credentials.apiKey ?? ctx.credentials.key ?? "";
     if (!key && ctx.providerId !== "custom") {
       return { ok: false, error: "API key is required." };
@@ -116,13 +114,19 @@ export const OpenAICompatAdapter: ProviderAdapter = {
     const base = ctx.baseURL.replace(/\/+$/, "");
     const url = base + "/chat/completions";
 
-    // Pick the cheapest known model for the probe. Prefer a small/flash seed,
-    // else the first seed, else a generic name the provider likely accepts.
+    // Most providers validate credentials via /models without a billed request.
+    // Z.AI scopes /models differently, so keep its chat probe using a seed.
+    if (!(ctx.tolerateStatusOnList?.includes(401))) {
+      try {
+        const response = await providerFetch(base + "/models", {
+          headers, signal: AbortSignal.timeout(15_000),
+        });
+        return response.ok ? { ok: true } : { ok: false, error: `Model discovery failed (HTTP ${response.status}). Check the endpoint and API key.` };
+      } catch (e) { return { ok: false, error: (e as Error).message }; }
+    }
     const seeds = ctx.seedModels ?? [];
-    const model =
-      seeds.find((m) => /flash|mini|turbo|air/i.test(m.id))?.apiName ??
-      seeds[0]?.apiName ??
-      "gpt-4o-mini";
+    const model = seeds.find((m) => /flash|mini|turbo|air/i.test(m.id))?.apiName ?? seeds[0]?.apiName;
+    if (!model) return { ok: false, error: "No model available for validation." };
 
     const body: Record<string, unknown> = {
       model,
@@ -133,10 +137,11 @@ export const OpenAICompatAdapter: ProviderAdapter = {
 
     let resp: Response;
     try {
-      resp = await fetch(url, {
+      resp = await providerFetch(url, {
         method: "POST",
         headers,
         body: JSON.stringify(body),
+        signal: AbortSignal.timeout(15_000),
       });
     } catch (e) {
       return {
@@ -178,7 +183,7 @@ export const OpenAICompatAdapter: ProviderAdapter = {
 
     let resp: Response;
     try {
-      resp = await fetch(chatUrl(ctx.baseURL), {
+      resp = await providerFetch(chatUrl(ctx.baseURL), {
         method: "POST",
         headers,
         body: JSON.stringify(body),
@@ -325,11 +330,19 @@ function expandMessages(messages: Message[]): unknown[] {
       }
       out.push(obj);
     } else {
-      // tool role: one wire message per result.
+      // Tool messages cannot carry images on many compatible providers.
+      const screenshots: string[] = [];
       for (const p of m.parts) {
         if (p.type !== "tool_result") continue;
-        out.push({ role: "tool", tool_call_id: p.toolCallId, content: p.content });
+        const isImage = p.name === "screenshot" && /^data:image\/(jpeg|png|webp);base64,/.test(p.content);
+        out.push({ role: "tool", tool_call_id: p.toolCallId,
+          content: isImage ? "Screenshot attached in the following user message." : p.content });
+        if (isImage) screenshots.push(p.content);
       }
+      if (screenshots.length) out.push({ role: "user", content: [
+        { type: "text", text: "Untrusted page screenshots from the preceding tool calls:" },
+        ...screenshots.map((url) => ({ type: "image_url", image_url: { url } })),
+      ] });
     }
   }
   return out;

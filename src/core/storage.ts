@@ -1,22 +1,9 @@
-/**
- * Storage layer.
- *
- * Two areas:
- *   - chrome.storage.session (memory-only, TRUSTED_CONTEXTS by default)
- *     => sessions, the decrypted credential working copy. Wiped on browser
- *        restart, never visible to content scripts.
- *   - chrome.storage.local (persisted to disk)
- *     => the encrypted credential envelope (AES-GCM, key derived from a user
- *        passphrase via PBKDF2), session mirror for crash recovery, and
- *        settings (selected provider/model, per-site permission grants).
- *
- * The passphrase itself is never stored. On browser restart the user re-enters
- * it to decrypt credentials back into storage.session. There is an opt-in
- * "remember passphrase" mode that stores it in session-only (cleared on
- * restart) to avoid re-entry within a single browser session.
+/** Credentials/settings persist locally; conversation checkpoints stay in memory.
+ * Both storage areas are restricted to trusted extension contexts. The stored
+ * AES key does not protect against someone with access to the browser profile.
  */
 
-import type { Session } from "./types";
+import type { Session, Model } from "./types";
 
 // Type-narrow the global chrome.storage accessors for ergonomics.
 type StorageArea = chrome.storage.StorageArea;
@@ -39,7 +26,7 @@ export interface Settings {
    * Autonomy mode.
    *   "ask"  -- prompt the user before any action that changes the page
    *             (click, type, navigate, ...). Default.
-   *   "auto" -- act without asking; no permission prompts.
+   *   "auto" -- ordinary actions run automatically; navigation/new origins ask.
    */
   autonomyMode?: "ask" | "auto";
   /**
@@ -102,27 +89,30 @@ async function setJSON(area: StorageArea, key: string, value: unknown): Promise<
 const sessionArea = (): StorageArea => chrome.storage.session;
 const localArea = (): StorageArea => chrome.storage.local;
 
-// Lock content scripts out of session storage. session defaults to
-// TRUSTED_CONTEXTS already, but we set it explicitly to be safe; we do NOT
-// raise local storage's access level.
+/** Fail closed on supported Chrome versions if either access lock fails. */
 export async function initStorageAccess(): Promise<void> {
-  try {
-    await chrome.storage.session.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
-  } catch {
-    // Older Chrome: setAccessLevel may not exist; default is already trusted-only.
-  }
+  await Promise.all([
+    chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" }),
+    chrome.storage.session.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" }),
+  ]);
+  // Remove transcripts persisted by older builds; they can contain page secrets.
+  const keys = Object.keys(await localArea().get(null));
+  await localArea().remove(keys.filter((key) => key.startsWith(`${SESSION_KEY}.`)));
 }
 
 // ---------------------------------------------------------------------------
-// Sessions (session area + local mirror for crash recovery)
+// Sessions (memory only; survives worker restarts, cleared when Chrome exits)
 // ---------------------------------------------------------------------------
 
 export async function saveSession(s: Session): Promise<void> {
   s.updatedAt = Date.now();
-  await setJSON(sessionArea(), sessionKey(s.sessionId), s);
-  // Mirror to local for crash recovery. Secrets never live on Session, so this
-  // is safe to persist.
-  await setJSON(localArea(), sessionKey(s.sessionId), s);
+  const stored = structuredClone(s);
+  for (const m of stored.history) for (const part of m.parts) {
+    if (part.type === "tool_result" && part.content.startsWith("data:image/")) {
+      part.content = "[screenshot omitted from checkpoint; capture again if needed]";
+    }
+  }
+  await setJSON(sessionArea(), sessionKey(s.sessionId), stored);
 }
 
 function sessionKey(sessionId: string): string {
@@ -131,10 +121,6 @@ function sessionKey(sessionId: string): string {
 
 export async function loadSession(sessionId: string): Promise<Session | undefined> {
   return getJSON<Session>(sessionArea(), sessionKey(sessionId));
-}
-
-export async function loadSessionLocal(sessionId: string): Promise<Session | undefined> {
-  return getJSON<Session>(localArea(), sessionKey(sessionId));
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {
@@ -154,17 +140,12 @@ export async function listActiveSessions(): Promise<Session[]> {
   return out;
 }
 
-/** Crash-recovery variant: read from the local mirror (session area is empty
- *  after a browser restart). */
-export async function listActiveSessionsLocal(): Promise<Session[]> {
-  const all = await localArea().get(null);
-  const out: Session[] = [];
-  for (const [k, v] of Object.entries(all)) {
-    if (k.startsWith(`${SESSION_KEY}.`) && v && typeof v === "object") {
-      out.push(v as Session);
-    }
-  }
-  return out;
+export async function saveProviderModels(providerId: string, models: Model[]): Promise<void> {
+  await setJSON(sessionArea(), `agent.models.${providerId}`, models);
+}
+
+export async function loadProviderModels(providerId: string): Promise<Model[]> {
+  return (await getJSON<Model[]>(sessionArea(), `agent.models.${providerId}`)) ?? [];
 }
 
 // ---------------------------------------------------------------------------
@@ -223,18 +204,8 @@ function b64ToBytes(s: string): Uint8Array {
  * Get-or-create the master AES key. On first run, a random 256-bit key is
  * generated with crypto.getRandomValues and persisted to storage.local.
  *
- * SECURITY TRADEOFF (read this honestly):
- * The master key lives in storage.local alongside the ciphertext. This means
- * the encryption is REAL defense-in-depth against content-script compromise
- * (the highest-value threat for an agent that injects into arbitrary pages --
- * a malicious page that exploits your injected script cannot read the key
- * because storage.local defaults to TRUSTED_CONTEXTS-only... well, actually
- * storage.local is readable by content scripts by default, so the real win is
- * keeping the DECRYPTED working copy in storage.session at TRUSTED_CONTEXTS,
- * which content scripts cannot read). It does NOT protect against disk
- * forensics -- an attacker with your disk gets key + ciphertext together.
- * The alternative that DOES protect against disk forensics is a user passphrase
- * (the previous design), which we removed for friction reasons.
+ * The key and ciphertext share storage.local, which is locked to trusted
+ * extension contexts. This is not protection against profile/disk access.
  */
 async function getMasterKey(): Promise<CryptoKey> {
   const stored = await getJSON<string>(localArea(), MASTER_KEY_STORE);
@@ -397,6 +368,7 @@ export async function upsertFact(input: {
   if (existing) {
     existing.text = input.text.trim().replace(/\s+/g, " ");
     existing.category = input.category;
+    existing.source = input.source;
     await saveMemory(facts);
     return existing;
   }

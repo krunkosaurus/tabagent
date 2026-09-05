@@ -19,7 +19,7 @@ export interface Manifest {
   optional_host_permissions?: string[];
   host_permissions: string[];
   content_security_policy: { extension_pages: string };
-  web_accessible_resources: { resources: string[]; matches: string[] }[];
+  web_accessible_resources?: { resources: string[]; matches: string[] }[];
   content_scripts?: Array<{
     matches: string[];
     js?: string[];

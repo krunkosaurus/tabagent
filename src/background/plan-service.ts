@@ -30,9 +30,9 @@ class PlanService {
   }
 
   /** Resolve a pending plan from the UI. */
-  resolve(planId: string, decision: PlanDecision): void {
+  resolve(planId: string, decision: PlanDecision, sessionId: string): void {
     const req = this.pending.get(planId);
-    if (!req) return;
+    if (!req || req.sessionId !== sessionId || !["approve", "reject"].includes(decision)) return;
     this.pending.delete(planId);
     req.resolve(decision);
   }

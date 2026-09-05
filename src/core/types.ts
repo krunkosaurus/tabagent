@@ -363,6 +363,8 @@ export interface Session {
   history: Message[];
 
   runId: string;
+  /** Last origin approved for this run; persists across worker recovery. */
+  approvedOrigin?: string;
   stepId: number;
   pendingStep: StepIntent | null;
   /** The assistant message currently being streamed (committed only on finish). */

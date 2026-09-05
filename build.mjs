@@ -1,7 +1,7 @@
 // esbuild bundler for the MV3 extension.
 // Three TS entrypoints -> three JS bundles; HTML + manifest copied as static assets.
 import * as esbuild from "esbuild";
-import { cpSync, mkdirSync, rmSync, writeFileSync, existsSync, unlinkSync } from "node:fs";
+import { cpSync, mkdirSync, rmSync, writeFileSync, existsSync, unlinkSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -91,6 +91,7 @@ try {
   });
   const manifest = (await import(pathToFileURL(manifestTmp).href)).default;
   unlinkSync(manifestTmp);
+  manifest.version = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version;
   writeFileSync(join(DIST, "manifest.json"), JSON.stringify(manifest, null, 2));
 
   copyStatic();

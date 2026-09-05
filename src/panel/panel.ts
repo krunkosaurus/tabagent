@@ -1,3 +1,4 @@
+import { isBackground, providerURL } from "../core/security";
 /**
  * Side panel UI (vanilla TS).
  *
@@ -45,7 +46,7 @@ interface PanelState {
   theme: "light" | "dark";
   /** Provider IDs that have stored credentials (from get_state). */
   configuredProviders: Set<string>;
-  /** What the agent has learned about the user (global memory). Hydrated from
+  /** Notes saved by the user (global memory). Hydrated from
    *  get_state and updated live by memory_update events. */
   userMemory: UserFact[];
   sessionId?: string;
@@ -75,6 +76,7 @@ const state: PanelState = {
 // ---------------------------------------------------------------------------
 
 async function boot(): Promise<void> {
+  $("build-version").textContent = `v${chrome.runtime.getManifest().version}`;
   state.tabId = (await chrome.tabs.query({ active: true, currentWindow: true }))[0]?.id ?? 0;
   startHeartbeat();
   listenForEvents();
@@ -114,25 +116,21 @@ async function boot(): Promise<void> {
   }
   render();
   maybeShowEmptyState();
-  // Selection-triggered suggestion: if the user clicked an action on the page
-  // (Explain/Summarize/...), the SW stashed a pending prompt and opened this
-  // panel. Auto-send it now that we're booted and the provider is ready. If the
-  // provider isn't connected yet, the prompt lands in the composer for the user
-  // to send after connecting.
-  void autoSendPendingPrompt();
+  // Enable selections on this explicitly activated tab and retrieve drafts.
+  void chrome.scripting.executeScript({ target: { tabId: state.tabId }, files: ["selection.js"] }).catch(() => {});
+  void loadPendingDraft();
 }
 
-/** Check for a selection-action prompt waiting for this tab and auto-send it. */
-async function autoSendPendingPrompt(): Promise<void> {
+/** Load a selection draft; only the user can submit it. */
+async function loadPendingDraft(): Promise<void> {
   try {
     const resp = await send<{ prompt: string | null }>({ kind: "pop_pending_prompt", tabId: state.tabId });
     const prompt = resp?.prompt;
     if (!prompt) return;
     const input = $("composer") as HTMLTextAreaElement;
     if (input) input.value = prompt;
-    // Try to send; if the provider isn't configured, onSend() will surface the
-    // "connect a provider" notice and leave the text in the composer.
-    await onSend();
+    input?.dispatchEvent(new Event("input", { bubbles: true }));
+    setNotice("Review the selected text, then press Send.");
   } catch {
     // Non-fatal: the user can still type and send manually.
   }
@@ -183,14 +181,20 @@ function startHeartbeat(): void {
 }
 
 function listenForEvents(): void {
-  chrome.runtime.onMessage.addListener((msg: PanelEvent, _sender, _sendResponse) => {
-    handleEvent(msg);
+  chrome.runtime.onMessage.addListener((msg: PanelEvent, sender, _sendResponse) => {
+    if (!isBackground(sender)) return false;
+    void handleEvent(msg);
     return false;
   });
 }
 
 async function handleEvent(e: PanelEvent): Promise<void> {
+  if ("sessionId" in e && e.sessionId && e.sessionId !== state.sessionId) return;
+
   switch (e.kind) {
+    case "selection_draft":
+      if (e.tabId === state.tabId) await loadPendingDraft();
+      break;
     case "session_state":
       if (e.session.tabId === state.tabId) {
         state.sessionId = e.session.sessionId;
@@ -223,7 +227,7 @@ async function handleEvent(e: PanelEvent): Promise<void> {
       break;
     case "permission_request":
       hideTyping();
-      showPermissionCard(e.toolCallId, e.name, e.reason, e.site);
+      showPermissionCard(e.toolCallId, e.name, e.reason, e.site, e.input, e.alwaysAsk);
       break;
     case "plan_proposed":
       showPlanCard(e.planId, e.steps);
@@ -541,17 +545,11 @@ function onStop(): void {
  * is a no-op; for new hosts it shows the Chrome permission prompt.
  */
 async function ensureHostPermission(baseURL: string): Promise<void> {
-  let origin: string;
-  try {
-    const u = new URL(baseURL);
-    origin = `${u.protocol}//${u.host}/*`;
-  } catch {
-    return; // can't parse -- skip (the fetch will just fail with a clear error)
-  }
-  const granted = await chrome.permissions.contains({ origins: [origin] });
-  if (granted) return;
+  const u = providerURL(baseURL);
+  const origin = `${u.protocol}//${u.hostname}/*`;
+  // Request immediately in the click handler, before any network or message await.
   const ok = await chrome.permissions.request({ origins: [origin] });
-  if (!ok) throw new Error(`host permission denied for ${origin}`);
+  if (!ok) throw new Error(`Host permission denied for ${origin}`);
 }
 
 async function refreshProviders(): Promise<void> {
@@ -634,7 +632,7 @@ function renderAutonomy(): void {
   const shield = $("autonomy-btn");
   if (shield) {
     shield.setAttribute("data-mode", mode);
-    shield.title = mode === "auto" ? "Act without asking (no prompts)" : "Ask before acting";
+    shield.title = mode === "auto" ? "Auto actions (navigation and new sites still ask)" : "Ask before acting";
   }
 }
 
@@ -773,6 +771,11 @@ function renderProviderChip(): void {
     if (name) name.textContent = def.shortName ?? def.name;
     const configured = state.configuredProviders.has(def.id);
     if (status) status.setAttribute("data-configured", String(configured));
+    const edit = $("edit-connection");
+    if (edit) {
+      edit.textContent = configured ? "Edit connection" : "Connect provider";
+      edit.title = `${configured ? "Edit" : "Connect"} ${def.shortName ?? def.name}`;
+    }
   }
 }
 
@@ -798,7 +801,19 @@ function renderProviderGrid(): void {
         <span class="dot"></span>${configured ? "Connected" : "Not set up"}
       </span>`;
     tile.addEventListener("click", () => onProviderTileClick(def.id));
-    grid.appendChild(tile);
+    const option = document.createElement("div");
+    option.className = "provider-option";
+    option.appendChild(tile);
+    if (configured) {
+      const edit = document.createElement("button");
+      edit.type = "button";
+      edit.className = "provider-edit";
+      edit.textContent = "Edit connection";
+      edit.setAttribute("aria-label", `Edit ${def.shortName ?? def.name} connection`);
+      edit.addEventListener("click", () => void openConnectModal(def.id));
+      option.appendChild(edit);
+    }
+    grid.appendChild(option);
   }
 }
 
@@ -830,17 +845,24 @@ function onProviderTileClick(providerId: string): void {
 
 // ---- Connect modal ----
 
-let connectTargetId = "";
-
-function openConnectModal(providerId: string): void {
+async function openConnectModal(providerId: string): Promise<void> {
   const def = state.providers.find((p) => p.id === providerId);
   if (!def) return;
-  connectTargetId = providerId;
+  const editing = state.configuredProviders.has(providerId);
+  let connection: { baseURL: string; hasSavedKey: boolean } | undefined;
+  if (editing) {
+    try {
+      connection = await send({ kind: "get_provider_connection", providerId });
+    } catch (e) {
+      setNotice(`Could not load connection: ${(e as Error).message}`, true);
+      return;
+    }
+  }
   // Hide the picker behind the modal.
   $("provider-picker")?.setAttribute("hidden", "");
 
   const title = $("connect-modal-title");
-  if (title) title.textContent = `Connect to ${def.shortName ?? def.name}`;
+  if (title) title.textContent = `${editing ? "Edit" : "Connect to"} ${def.shortName ?? def.name}`;
 
   const body = $("connect-modal-body");
   if (!body) return;
@@ -855,8 +877,13 @@ function openConnectModal(providerId: string): void {
     lbl.textContent = f.label;
     const inp = document.createElement("input");
     inp.id = `modal-auth-${f.key}`;
+    lbl.htmlFor = inp.id;
     inp.type = f.type;
     inp.placeholder = f.placeholder ?? "";
+    if (f.key === "baseURL") inp.value = connection?.baseURL ?? def.baseURL;
+    if (f.key === "apiKey" && connection?.hasSavedKey) {
+      inp.placeholder = "Leave blank to keep the saved key";
+    }
     if (f.required) inp.required = true;
     field.append(lbl, inp);
     if (f.help) {
@@ -866,6 +893,31 @@ function openConnectModal(providerId: string): void {
       field.appendChild(help);
     }
     wrap.appendChild(field);
+  }
+
+  const hasSavedKey = !!connection?.hasSavedKey;
+  let keyless: HTMLInputElement | undefined;
+  if (hasSavedKey && def.authFields.some((f) => f.key === "apiKey" && !f.required)) {
+    const label = document.createElement("label");
+    label.className = "connect-keyless";
+    keyless = document.createElement("input");
+    keyless.type = "checkbox";
+    keyless.id = "connect-keyless";
+    label.append(keyless, "Use without an API key");
+    wrap.appendChild(label);
+    keyless.addEventListener("change", () => {
+      const input = wrap.querySelector<HTMLInputElement>("#modal-auth-apiKey");
+      if (input) {
+        input.disabled = !!keyless?.checked;
+        if (input.disabled) input.value = "";
+      }
+    });
+  }
+  if (hasSavedKey) {
+    const help = document.createElement("p");
+    help.className = "connect-footer-link";
+    help.textContent = "Leave the key blank to keep it. If you change the server address, enter a key for that server or choose to use no key.";
+    wrap.appendChild(help);
   }
 
   // Validation message area.
@@ -881,7 +933,8 @@ function openConnectModal(providerId: string): void {
   const connectBtn = document.createElement("button");
   connectBtn.type = "button";
   connectBtn.className = "btn-connect";
-  connectBtn.textContent = "Connect";
+  const actionLabel = editing ? "Save changes" : "Connect";
+  connectBtn.textContent = actionLabel;
   actions.append(connectBtn);
   wrap.appendChild(actions);
 
@@ -893,7 +946,9 @@ function openConnectModal(providerId: string): void {
     wrap.appendChild(link);
   }
 
-  connectBtn.addEventListener("click", () => void onConnectFromModal(connectTargetId, connectBtn, msg));
+  connectBtn.addEventListener("click", () => void onConnectFromModal(
+    providerId, connectBtn, msg, hasSavedKey && !keyless?.checked, actionLabel,
+  ));
 
   // Enter inside any auth field triggers Connect (validate-then-connect).
   wrap.addEventListener("keydown", (e) => {
@@ -913,7 +968,7 @@ function openConnectModal(providerId: string): void {
 
 function closeConnectModal(): void {
   $("connect-modal")?.setAttribute("hidden", "");
-  connectTargetId = "";
+  document.querySelectorAll<HTMLInputElement>('[id^="modal-auth-"]').forEach((input) => { input.value = ""; });
 }
 
 /** Read auth field values from whichever surface holds them (modal or header). */
@@ -926,44 +981,33 @@ function readAuthFields(def: ProviderDefinition, prefix: "modal-auth-" | "auth-"
   return creds;
 }
 
-/** Connect from the modal: validate first (no persistence on a bad key),
- * then request host permission and persist + switch the provider. */
+/** Request host access in the click gesture, then validate and persist. */
 async function onConnectFromModal(
   providerId: string,
   connectBtn: HTMLButtonElement,
   msgEl: HTMLElement,
+  keepSavedKey = false,
+  actionLabel = "Connect",
 ): Promise<void> {
   const def = state.providers.find((p) => p.id === providerId);
   if (!def) return;
   const credentials = readAuthFields(def, "modal-auth-");
 
-  // Step 1: validate the key live before requesting any permission or persisting.
+  // Begin in the user click stack; do not await anything before host access.
   connectBtn.classList.add("checking");
   connectBtn.disabled = true;
   connectBtn.textContent = "Validating…";
   msgEl.className = "validation-msg";
   msgEl.innerHTML = `<span class="spinner"></span> Checking key…`;
   try {
-    const res = await send<{ ok: boolean; error?: string }>({ kind: "validate_token", providerId, credentials });
-    if (!res.ok) {
-      msgEl.className = "validation-msg err";
-      msgEl.textContent = `✕ ${res.error ?? "Invalid token."}`;
-      return;
-    }
-    msgEl.className = "validation-msg ok";
-    msgEl.textContent = "✓ Token is valid.";
-
-    // Step 2: request host permission FIRST (must stay in this user-gesture stack),
-    // then persist + switch. connect_provider re-validates server-side as a safety net.
-    connectBtn.textContent = "Connecting…";
-    msgEl.className = "validation-msg";
-    msgEl.innerHTML = `<span class="spinner"></span> Connecting…`;
     const baseURL = def.id === "custom" ? credentials.baseURL || def.baseURL : def.baseURL;
     await ensureHostPermission(baseURL);
+    connectBtn.textContent = "Connecting…";
     const resp = await send<{ models: Model[]; selectedModelId: string }>({
       kind: "connect_provider",
       providerId,
       credentials,
+      keepSavedKey,
     });
     state.models = Array.isArray(resp?.models) ? resp.models : [];
     state.modelId = resp.selectedModelId || def.defaultLargeModelId || state.models[0]?.id;
@@ -981,7 +1025,7 @@ async function onConnectFromModal(
   } finally {
     connectBtn.classList.remove("checking");
     connectBtn.disabled = false;
-    connectBtn.textContent = "Connect";
+    connectBtn.textContent = actionLabel;
   }
 }
 
@@ -1104,7 +1148,7 @@ function appendToolResult(name: string, content: string, isError?: boolean): voi
     div.innerHTML = `
       <div class="collapse-header">
         <svg class="chevron" viewBox="0 0 10 10"><path d="M3 2L7 5L3 8" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        <span class="collapse-label">${name} → ${preview}</span>
+        <span class="collapse-label">${escapeHtml(name)} → ${escapeHtml(preview)}</span>
         <span class="collapse-meta">${status}</span>
       </div>
       <div class="collapse-body"></div>`;
@@ -1138,7 +1182,10 @@ function populateToolBody(body: Element, content: string, isImage: boolean): voi
 function showImageLightbox(src: string): void {
   const overlay = document.createElement("div");
   overlay.className = "image-lightbox";
-  overlay.innerHTML = `<img src="${src}" alt="Screenshot" />`;
+  const image = document.createElement("img");
+  image.src = src;
+  image.alt = "Screenshot";
+  overlay.appendChild(image);
   // Click anywhere (or Esc) to close.
   overlay.addEventListener("click", () => overlay.remove());
   document.body.appendChild(overlay);
@@ -1212,29 +1259,35 @@ function appendError(message: string): void {
   scrollMessages();
 }
 
-function showPermissionCard(toolCallId: string, name: string, reason: string, site?: string): void {
+function showPermissionCard(toolCallId: string, name: string, reason: string, site?: string, input: Record<string, unknown> = {}, alwaysAsk = false): void {
+  const sessionId = state.sessionId ?? "";
   const card = document.createElement("div");
   card.className = "card permission";
   const siteLine = site ? `<div class="card-site">${escapeHtml(site)}</div>` : "";
   card.innerHTML = `<div class="card-title">Permission: ${escapeHtml(name)}</div><div class="card-body">${escapeHtml(reason)}</div>${siteLine}`;
 
+  const details = document.createElement("pre");
+  details.textContent = JSON.stringify(input, null, 2);
+  details.style.whiteSpace = "pre-wrap";
+  details.style.overflowWrap = "anywhere";
+  card.appendChild(details);
   const allow = document.createElement("button");
   allow.className = "allow";
   allow.textContent = "Allow once";
   allow.onclick = () => {
-    void send({ kind: "permission_decision", sessionId: state.sessionId ?? "", toolCallId, decision: "allow" });
+    void send({ kind: "permission_decision", sessionId: sessionId, toolCallId, decision: "allow" });
     card.remove();
   };
 
   const allowOnSite = document.createElement("button");
   allowOnSite.className = "allow-on-site";
   allowOnSite.textContent = site ? `Allow on ${shortSite(site)}` : "Allow on this site";
-  allowOnSite.title = "Auto-approve ALL tool actions on this site in future. No more prompts here.";
+  allowOnSite.title = "Approve ordinary actions on this origin. Navigation still asks.";
   allowOnSite.onclick = () => {
     if (site) {
-      void send({ kind: "permission_decision", sessionId: state.sessionId ?? "", toolCallId, decision: { kind: "always_allow_on_site", site } });
+      void send({ kind: "permission_decision", sessionId: sessionId, toolCallId, decision: { kind: "always_allow_on_site", site } });
     } else {
-      void send({ kind: "permission_decision", sessionId: state.sessionId ?? "", toolCallId, decision: "allow" });
+      void send({ kind: "permission_decision", sessionId: sessionId, toolCallId, decision: "allow" });
     }
     card.remove();
   };
@@ -1242,7 +1295,7 @@ function showPermissionCard(toolCallId: string, name: string, reason: string, si
   const deny = document.createElement("button");
   deny.textContent = "Deny";
   deny.onclick = () => {
-    void send({ kind: "permission_decision", sessionId: state.sessionId ?? "", toolCallId, decision: "deny" });
+    void send({ kind: "permission_decision", sessionId: sessionId, toolCallId, decision: "deny" });
     card.remove();
   };
 
@@ -1252,7 +1305,7 @@ function showPermissionCard(toolCallId: string, name: string, reason: string, si
   const actions = document.createElement("div");
   actions.className = "card-actions";
   actions.append(allow);
-  if (site) actions.append(allowOnSite);
+  if (site && !alwaysAsk) actions.append(allowOnSite);
   actions.append(deny);
   card.append(actions);
   $("messages")?.appendChild(card);
@@ -1267,7 +1320,7 @@ function escapeHtml(s: string): string {
 
 /** Shorten a hostname for display: drop the leading www. and TLD. */
 function shortSite(site: string): string {
-  return site.replace(/^www\./, "").split(".")[0] || site;
+  try { return new URL(site).host; } catch { return site; }
 }
 
 // ---------------------------------------------------------------------------
@@ -1304,8 +1357,8 @@ function showPlanCard(planId: string, steps: PlanStep[]): void {
     row.innerHTML = `
       <span class="step-marker"></span>
       <span class="step-text">
-        <span class="step-title">${st.title}</span>
-        ${st.detail ? `<span class="step-detail">${st.detail}</span>` : ""}
+        <span class="step-title">${escapeHtml(st.title)}</span>
+        ${st.detail ? `<span class="step-detail">${escapeHtml(st.detail)}</span>` : ""}
       </span>`;
     checklist.appendChild(row);
   });
@@ -1367,7 +1420,7 @@ function tickPlanStep(stepId: string, status: "pending" | "progress" | "done"): 
 function showInterruptedCard(sessionId: string, pending: { id: string; name: string }[]): void {
   const card = document.createElement("div");
   card.className = "card interrupted";
-  card.innerHTML = `<div class="card-title">Run was interrupted</div><div class="card-body">Some tool actions may have completed. Pending: ${pending.map((p) => p.name).join(", ") || "none"}</div>`;
+  card.innerHTML = `<div class="card-title">Run was interrupted</div><div class="card-body">Some tool actions may have completed. Pending: ${escapeHtml(pending.map((p) => p.name).join(", ") || "none")}</div>`;
   for (const action of ["retry", "skip", "abort"] as const) {
     const btn = document.createElement("button");
     btn.textContent = action;
@@ -1497,7 +1550,7 @@ function renderMemoryBtn(): void {
   btn.setAttribute(
     "data-tip",
     n === 0
-      ? "Memory: the agent hasn't learned anything about you yet"
+      ? "Memory: no saved notes"
       : `Memory: ${n} note${n === 1 ? "" : "s"} about you`,
   );
 }
@@ -1669,7 +1722,7 @@ async function deleteMemoryFact(id: string): Promise<void> {
 
 async function clearAllMemory(): Promise<void> {
   // Confirm before wiping -- this is destructive.
-  if (!confirm("Forget everything the agent has learned about you? This cannot be undone.")) {
+  if (!confirm("Delete all saved notes? This cannot be undone.")) {
     return;
   }
   // Reuse the send_message fast-path the SW already handles (it short-circuits
@@ -1700,6 +1753,10 @@ document.addEventListener("DOMContentLoaded", () => {
   $("stop-btn")?.addEventListener("click", () => onStop());
   // Provider chip -> open picker.
   $("provider-chip")?.addEventListener("click", () => openProviderPicker());
+  $("edit-connection")?.addEventListener("click", () => {
+    if (state.providerId) void openConnectModal(state.providerId);
+    else openProviderPicker();
+  });
   $("picker-close")?.addEventListener("click", () => closeProviderPicker());
   // Clicking the backdrop closes the picker.
   $("provider-picker")?.addEventListener("click", (e) => {

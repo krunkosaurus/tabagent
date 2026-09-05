@@ -27,6 +27,8 @@ interface PendingRequest {
   name: string;
   input: Record<string, unknown>;
   reason: string;
+  site: string;
+  alwaysAsk: boolean;
   resolve: (d: Decision) => void;
 }
 
@@ -50,10 +52,11 @@ class PermissionService {
     call: ToolCall,
     reason: string,
     site: string,
+    alwaysAsk = false,
   ): Promise<Decision> {
     // Check the grant store first: domain-wide OR per-tool.
     return this.hasGrant(site, call.name).then((granted) => {
-      if (granted) return "allow" as Decision;
+      if (granted && !alwaysAsk) return "allow" as Decision;
       return new Promise<Decision>((resolve) => {
         const req: PendingRequest = {
           sessionId,
@@ -61,6 +64,8 @@ class PermissionService {
           name: call.name,
           input: call.input,
           reason,
+          site,
+          alwaysAsk,
           resolve,
         };
         this.pending.set(call.id, req);
@@ -70,15 +75,18 @@ class PermissionService {
   }
 
   /** Resolve a pending request from the UI. */
-  resolve(toolCallId: string, decision: Decision): void {
+  resolve(toolCallId: string, decision: Decision, sessionId: string): void {
     const req = this.pending.get(toolCallId);
-    if (!req) return;
+    if (!req || req.sessionId !== sessionId) return;
+    if (decision !== "allow" && decision !== "deny" &&
+        (typeof decision !== "object" || !decision || req.alwaysAsk || decision.site !== req.site ||
+         !["always_allow_on_site", "always_allow_tool_on_site"].includes(decision.kind))) return;
     this.pending.delete(toolCallId);
     if (typeof decision === "object") {
       if (decision.kind === "always_allow_on_site") {
-        this.recordGrant(decision.site, SITE_WILDCARD).catch(() => {});
+        this.recordGrant(req.site, SITE_WILDCARD).catch(() => {});
       } else if (decision.kind === "always_allow_tool_on_site") {
-        this.recordGrant(decision.site, req.name).catch(() => {});
+        this.recordGrant(req.site, req.name).catch(() => {});
       }
     }
     req.resolve(decision);

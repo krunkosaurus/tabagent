@@ -1,3 +1,4 @@
+import { webURL } from "../core/security";
 /**
  * Browser tools (CDP-backed).
  *
@@ -63,7 +64,7 @@ const INTERACTIVE_SELECTOR = [
 ].join(",");
 
 // Injected into the page. Builds/maintains the WeakRef ref-store and walks the
-// DOM for interactive elements + headings. Runs in PAGE context, so it must be
+// DOM for interactive elements + headings. Runs in an isolated page world, so it must be
 // self-contained (no closures over outer variables).
 //
 // The walker maintains a STABLE ref store: elements seen before keep their ref
@@ -551,9 +552,9 @@ class NavigateTool implements AnnotatedTool {
   async run(call: ToolCall, ctx: ToolContext): Promise<ToolResult> {
     const parsed = parseInput(call);
     if (!parsed.ok) return err(call, parsed.error);
-    const url = String((parsed.input as Record<string, unknown>).url ?? "");
-    if (!url) return err(call, "missing required parameter: url");
+    let url: string;
     try {
+      url = webURL(String(parsed.input.url ?? "")).href;
       const res = await ctx.cdp<{ errorText?: string }>("Page.navigate", { url });
       // CDP returns errorText when navigation is blocked (beforeunload, invalid
       // URL, etc.). The beforeunload case reads as "navigation was blocked" --

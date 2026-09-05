@@ -1,3 +1,4 @@
+import { providerURL } from "../core/security";
 /**
  * Provider registry + factory.
  *
@@ -40,7 +41,7 @@ export function buildContext(
 
   return {
     providerId: def.id,
-    baseURL,
+    baseURL: providerURL(baseURL).href.replace(/\/+$/, ""),
     credentials,
     extraHeaders: def.extraHeaders,
     extraBody: def.extraBody,

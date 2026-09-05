@@ -1,6 +1,8 @@
 # TabAgent
 
-> Turn any browser tab into an AI agent.
+> A supervised AI agent for one browser tab.
+
+Build from source using the instructions below to include the latest security and reliability fixes. See [the security review](SECURITY.md) for data flows, validation and remaining limitations.
 
 <p align="center">
   <img src=".github/assets/banner.png" alt="TabAgent — turn any browser tab into an AI agent" width="100%" />
@@ -22,67 +24,50 @@ https://github.com/user-attachments/assets/2adfd956-d6e8-4b5c-893d-dc04f92abe66
 
 - **Any OpenAI-compatible provider** — Z.AI, Zhipu/BigModel, OpenAI, OpenRouter, DeepSeek, Groq, xAI (Grok), Mistral, Fireworks, Cerebras, Moonshot (Kimi), Hugging Face, or any custom endpoint (Ollama, LM Studio, …) through a single adapter
 - **11 CDP browser tools** — snapshot, click, type, scroll, hover, key presses, screenshots, text extraction, and more (see [Browser tools](#browser-tools))
-- **Resumable agent loop** — a checkpointed state machine (up to 200 steps) that survives service-worker death and crashes mid-run
+- **Resumable agent loop** — memory-only checkpoints survive service-worker restarts; conversations are cleared when Chrome exits
 - **Plan approval** — the agent can propose a step-by-step plan; you approve or reject it, then watch steps tick off live in the panel
 - **Permission system** — per-site grants (site-wide or per-tool), plus **ask**/**auto** autonomy modes
 - **Mid-run steering** — queue follow-up messages while the agent is working; they're folded into the run
-- **Cross-session memory** — `remember`/`forget` tools, automatic fact extraction after each turn, a memory manager in the panel, and "forget everything" intent detection (English and Arabic)
+- **Manual saved notes** — add, edit or delete notes in the Memory panel. Automatic extraction and model-written memory have been removed.
 - **Skills** — keyword-activated expert procedures; ships with full-page translation via in-place text replacement with automatic LTR/RTL handling
-- **Selection menu** — select text on any page for a floating **Explain / Summarize / Translate / Rewrite / Ask** menu that hands off to the agent
+- **Selection drafts** — on an explicitly activated tab, selected text can fill a draft. Review it and press Send in the panel.
 - **Unattended-run hygiene** — JS dialogs (`alert`/`confirm`/`prompt`) are auto-dismissed; `beforeunload` blocks are detected and reported instead of hanging
 - **Notifications** — chime + system toast when a run finishes or needs your attention (toggleable)
 - **Polished chat UI** — streaming markdown, collapsible reasoning blocks, screenshot lightbox, suggested next-action chips, light/dark theme, JSON conversation export
 
 ## Installation
 
-Walkthrough — download the `.zip` and load it into Chrome:
-
-https://github.com/user-attachments/assets/695d7270-c2fb-4a84-b8eb-b198f2b8ed8e
-
-Requires Chrome 120+.
-
-### Option A: download the pre-built extension
-
-[![Download TabAgent](https://img.shields.io/badge/Download-TabAgent-4285F4?logo=googlechrome&logoColor=white)](../../releases/latest)
-
-1. Click the button above (or go to **[Releases](../../releases/latest)**) and download **`TabAgent-v0.1.0.zip`** (the latest release asset).
-2. **Unzip** it. You'll get a folder with `manifest.json` at its root — keep track of where it is.
-3. Open **`chrome://extensions`** in Chrome.
-4. Turn on **Developer mode** (toggle in the top-right corner).
-5. Click **Load unpacked** and select the unzipped folder from step 2.
-6. Open the side panel with **Cmd/Ctrl+Shift+A** (or click the TabAgent toolbar icon).
-
-> The release `.zip` is permanently hosted and always points to the latest version.
-
-### Option B: build from source
-
-Requires Node.js.
+Requires Chrome 120+ and Node.js 22+ for this development setup.
 
 ```sh
-npm install
-npm run build   # esbuild → dist/
+npm ci --ignore-scripts
+npm run build
 ```
 
-Then load the generated **`dist/`** folder via **Load unpacked** (steps 3–5 above).
+1. Open `chrome://extensions` in Chrome (prefer a separate profile for browser automation).
+2. Enable **Developer mode**, click **Load unpacked**, and select this repository's **dist/** folder.
+3. Pin TabAgent, visit a regular web page, and open its panel using the toolbar or **Cmd/Ctrl+Shift+A**.
+4. Open the provider picker. Choose a provider, enter its API key in the extension, and click **Connect**. Chrome requests access to that API host before validation runs.
+5. Pick a model from the provider's live list. Keep **Ask** mode on for initial use.
+6. Try “Summarize this page in three bullet points” on a public page, then a harmless form on a test page.
 
-### After install
+To edit the current connection, click **Edit connection** directly below the
+panel header. The version beside it identifies the loaded build (currently
+**v0.1.7**). To edit another saved provider, open the provider picker and use its
+**Edit connection** button. Change the base URL or API key
+and click **Save changes**. An empty key field keeps the existing key when the
+server address is unchanged. For a different address, explicitly enter that
+server's key or select **Use without an API key**. Saving preserves your model
+selection if the server still lists it. Use the top model dropdown to change
+models. Stop any active run before editing its connection.
 
-- **Cmd/Ctrl+Shift+A** — open the side panel
-- **Cmd/Ctrl+Shift+Y** — open the popup (a one-button side-panel launcher)
+For Claude models, choose **OpenRouter** and select a Claude model from its live list. This requires an OpenRouter API key and any applicable API billing; a Claude browser subscription cannot be used as the credential. The native Anthropic adapter is still unimplemented.
 
-Next, connect a provider and API key — see [Quick start](#quick-start).
+For a local model, choose **Custom**, use your running server's OpenAI-compatible base URL (for example `http://localhost:11434/v1`), and choose an installed model that supports tool calling. Remote providers require HTTPS; HTTP is allowed only on loopback. Nothing contacts a provider until you explicitly connect or use it.
 
-> Chrome will warn about the `debugger` permission at install — see [The debugger permission](#the-debugger-permission) for why it's required.
+Review the exact URL/text in each action prompt. Plan approval keeps individual action checks in place. Navigation and entering a new origin require approval even in Auto mode. Site grants apply to the full origin (scheme, hostname and port).
 
-## Quick start
-
-1. Open the side panel (**Cmd/Ctrl+Shift+A** or the toolbar icon).
-2. Pick a provider — **Z.AI (Coding Plan)** is the default. Z.AI's coding plan is OpenAI-compatible; no OAuth or special flow.
-3. Paste your API key and click **Connect**. The key is validated live, host permission for the provider's domain is requested here (not at install), and the key is encrypted at rest on connect.
-4. Pick a model from the live model list. The default is **`glm-5.2`** — 1M context with reasoning support.
-5. Navigate to any page, type a goal — *"summarize this page"*, *"fill the search form and submit"*, *"click every unchecked checkbox"* — and hit Send.
-
-No passphrase, no setup wizard.
+Conversations are kept in memory and cleared on browser exit. Export a conversation explicitly if you want to retain it. On upgrade, this build removes old disk checkpoint mirrors; export anything you need with the previous build first. Credentials, settings, site grants and manually saved notes still persist locally.
 
 ## Providers
 
@@ -126,7 +111,7 @@ Eleven CDP-backed tools, defined in `src/tools/browser-tools.ts`:
 | `extractText` | Visible text of the page or a `ref` subtree |
 | `set_text` | Overwrite an element's text in place (powers page translation, auto LTR/RTL) |
 
-The agent loop also injects control tools: `propose_plan`, `suggest_actions`, `remember`, and `forget`.
+The agent loop also offers `propose_plan` and `suggest_actions`. Durable notes can only be edited in the panel.
 
 ## How it works
 
@@ -135,14 +120,14 @@ Side panel (UI only)
       ↕  chrome.runtime messages
 Service worker (orchestrator)
    ├─ Agent loop — resumable state machine
-   ├─ Checkpointing — storage.session + local mirror
+   ├─ Checkpointing — storage.session only
    ├─ Permission & plan-approval services
    └─ chrome.alarms heartbeat (recovery)
       ↕  chrome.debugger (CDP)
 Active tab (debuggee)
 ```
 
-The loop (`src/background/loop.ts`) checkpoints state before every side effect, so recovery after a crash or service-worker restart is deterministic:
+The loop (`src/background/loop.ts`) checkpoints progress during a run. Recovery is limited to the current browser session:
 
 - **Mid-stream** (no assistant message committed) → re-send the stream
 - **Mid-tool** (a mutating tool may have run) → stop and ask the user; mutating tools are never auto-replayed
@@ -160,18 +145,19 @@ CDP is required for capabilities a content script cannot provide:
 
 - **Trusted input** (`Input.dispatchMouseEvent` and friends) that defeats synthetic-event bot detection
 - **Full-page screenshots** beyond the viewport
-- **Cross-origin iframes** and **closed shadow DOM**
-- **File upload** (`DOM.setFileInputFiles`)
 - **Service-worker keepalive** during long runs
 
 ## Security & privacy
 
-- API keys are encrypted at rest with AES-GCM using a **random 256-bit master key auto-generated on first run** — no passphrase to manage. The master key lives in `chrome.storage.local`, which protects against content-script compromise (the realistic threat for an agent injected into arbitrary pages) but **not** disk forensics: an attacker with your disk gets key and ciphertext together.
-- Decrypted keys exist only in `chrome.storage.session` at `TRUSTED_CONTEXTS` access level — content scripts cannot read them.
-- All provider requests originate in the service worker, never in a content script.
-- Host permissions are requested per provider domain at connect time; the extension installs with no host permissions.
-- `navigate` requires explicit user approval per call, and other tools can be gated per site.
-- **Prompt injection is an inherent risk** for any agent that reads untrusted page content. TabAgent does not run an injection classifier — treat the agent like a user with limited trust and review its permission prompts.
+- No analytics SDK, telemetry collector, or developer-owned relay was found in the reviewed source. Optional application attribution headers have been removed.
+- Chat messages, page content and screenshots needed for a task go directly to the provider you connect. Its own retention/training policies still apply.
+- Both storage areas are restricted to trusted extension contexts. API keys are AES-GCM encrypted locally, but the encryption key is in the same Chrome profile: this does not protect against profile theft or a compromised computer.
+- Content scripts cannot call privileged panel commands. Selection actions prepare drafts only. The extension installs with no required host permissions or global content script injection.
+- Page inspection runs in a separate JavaScript world. The page DOM, links and text remain untrusted; prompt injection and destructive model actions cannot be eliminated by these changes.
+- Ask mode gates page mutations unless you have explicitly granted the origin. Navigation and access to a new origin always ask. Requests reject unsafe URL schemes, remote HTTP and provider redirects.
+- The debugger permission remains powerful. Use supervised tasks and keep sensitive account administration, payments and secrets out of the agent's workflow.
+
+See [SECURITY.md](SECURITY.md) for findings, validation and limits.
 
 ## Limitations
 
@@ -186,9 +172,11 @@ CDP is required for capabilities a content script cannot provide:
 ## Development
 
 ```sh
-npm run typecheck   # tsc --noEmit
-npm run build       # esbuild → dist/
-npm run clean       # rm -rf dist
+npm run typecheck
+npm run build
+npm test
+npx playwright install chromium
+npm run test:browser
 ```
 
 Iterate by rebuilding, reloading the extension at `chrome://extensions`, and refreshing the target tab.

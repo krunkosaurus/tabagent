@@ -19,7 +19,8 @@ import type { UserFact, UserFactCategory } from "../core/storage";
 // ---------------------------------------------------------------------------
 
 export type PanelRequest =
-  | { kind: "connect_provider"; providerId: string; credentials: Record<string, string> }
+  | { kind: "connect_provider"; providerId: string; credentials: Record<string, string>; keepSavedKey?: boolean }
+  | { kind: "get_provider_connection"; providerId: string }
   | { kind: "validate_token"; providerId: string; credentials: Record<string, string> }
   | { kind: "list_providers" }
   | { kind: "list_models"; providerId: string }
@@ -59,12 +60,13 @@ export type PermissionDecision =
 // ---------------------------------------------------------------------------
 
 export type PanelEvent =
+  | { kind: "selection_draft"; tabId: number }
   | { kind: "session_state"; session: Session }
   | { kind: "stream_part"; sessionId: string; part: StreamPart }
   | { kind: "assistant_message"; sessionId: string; message: Session["history"][number] }
   | { kind: "tool_call_started"; sessionId: string; name: string; input: Record<string, unknown> }
   | { kind: "tool_result"; sessionId: string; name: string; content: string; isError?: boolean }
-  | { kind: "permission_request"; sessionId: string; toolCallId: string; name: string; input: Record<string, unknown>; reason: string; site?: string }
+  | { kind: "permission_request"; sessionId: string; toolCallId: string; name: string; input: Record<string, unknown>; reason: string; site?: string; alwaysAsk?: boolean }
   | { kind: "plan_proposed"; sessionId: string; planId: string; steps: PlanStep[] }
   | { kind: "plan_step_update"; sessionId: string; stepId: string; status: "pending" | "progress" | "done" }
   | { kind: "actions_suggested"; sessionId: string; messageId: string; actions: SuggestedAction[] }

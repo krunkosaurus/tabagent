@@ -1,4 +1,5 @@
 import { isExtensionPage, isSelectionSender, providerURL } from "../core/security";
+import { openTabPanel, panelTabId } from "../shared/panel-target";
 /**
  * Service worker entry.
  *
@@ -23,6 +24,7 @@ import {
   loadSettings,
   readProviderCredentials,
   saveSettings,
+  saveSession,
   saveProviderModels,
   unlockCredentials,
   writeEncryptedCredentials,
@@ -30,6 +32,10 @@ import {
   upsertFact,
   deleteFact,
   clearMemory,
+  loadTabState,
+  saveTabState,
+  deleteTabState,
+  sessionsForTab,
 } from "../core/storage";
 import { BUILTIN_PROVIDERS, getProviderDefinition } from "../providers/catalog";
 import { buildContext, getAdapter } from "../providers/registry";
@@ -123,6 +129,9 @@ function isForgetEverythingIntent(text: string): boolean {
 // unlockCredentials() has populated the working copy. Without this gate, a
 // returning user's first list_models/connect could read empty creds.
 async function bootstrap(): Promise<void> {
+  // Disable the old global panel, including options left by earlier builds.
+  await chrome.sidePanel.setOptions({ enabled: false });
+  await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
   await initStorageAccess();
   await ensureAlarm();
   await ensureOffscreen();
@@ -228,25 +237,55 @@ async function heartbeat(): Promise<void> {
 
 const PANEL_REQUEST_KINDS = new Set([
   "list_providers", "list_models", "seed_models", "validate_token", "connect_provider", "get_provider_connection",
-  "select_model", "set_autonomy", "set_notifications", "set_theme", "get_memory",
+  "select_model", "set_draft", "set_autonomy", "set_notifications", "set_theme", "get_memory",
   "set_memory", "delete_memory", "export_session", "send_message", "stop", "pause",
   "resume", "permission_decision", "plan_decision", "resume_interrupted", "get_state",
   "open_side_panel_for_tab", "new_session", "selection_action", "pop_pending_prompt",
 ]);
 
+// Starting a turn is serialized per tab, so rapid sends cannot create two runs.
+const tabRequests = new Map<number, Promise<unknown>>();
+function routePanelRequest(req: PanelRequest, sender: chrome.runtime.MessageSender): Promise<unknown> {
+  const tabId = panelTabId(sender.url);
+  if (tabId === undefined || !["send_message", "new_session"].includes(req.kind)) {
+    return handlePanelRequest(req, sender);
+  }
+  const request = (tabRequests.get(tabId) ?? Promise.resolve()).catch(() => {})
+    .then(() => handlePanelRequest(req, sender));
+  tabRequests.set(tabId, request);
+  void request.finally(() => { if (tabRequests.get(tabId) === request) tabRequests.delete(tabId); }).catch(() => {});
+  return request;
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   const kind = msg?.kind;
   // Ignore events and offscreen messages so their owning listener can answer.
   if (typeof kind !== "string" || !PANEL_REQUEST_KINDS.has(kind)) return false;
-  const trusted = isExtensionPage(sender, ["panel.html", "popup.html"]);
+  const trusted = isExtensionPage(sender, ["panel.html"]) ||
+    (kind === "open_side_panel_for_tab" && isExtensionPage(sender, ["popup.html"]));
   if (!trusted && !(kind === "selection_action" && isSelectionSender(sender))) {
     sendResponse({ ok: false, error: "Untrusted message sender" });
     return false;
   }
+  // Opening must begin before any await; even waiting on an already-resolved
+  // initialization promise loses Chrome's user-gesture permission.
+  if (kind === "open_side_panel_for_tab") {
+    const owner = panelTabId(sender.url);
+    if (owner !== undefined && owner !== msg.tabId) {
+      sendResponse({ ok: false, error: "This panel belongs to another tab." });
+      return false;
+    }
+    void openTabPanel(msg.tabId).then(() => sendResponse({ ok: true, data: { ok: true } }),
+      (e) => sendResponse({ ok: false, error: (e as Error).message }));
+    return true;
+  }
+  if (kind === "selection_action" && sender.tab?.id != null) {
+    void openTabPanel(sender.tab.id).catch(() => {});
+  }
   void (async () => {
     try {
       await ready;
-      const data = await handlePanelRequest(msg as PanelRequest, sender);
+      const data = await routePanelRequest(msg as PanelRequest, sender);
       sendResponse({ ok: true, data });
     } catch (e) {
       sendResponse({ ok: false, error: (e as Error).message });
@@ -256,6 +295,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 async function handlePanelRequest(req: PanelRequest, sender: chrome.runtime.MessageSender): Promise<unknown> {
+  const tabId = panelTabId(sender.url);
+  if (req.kind !== "selection_action" && req.kind !== "open_side_panel_for_tab") {
+    if (tabId === undefined) throw new Error("Open TabAgent from the toolbar on the intended tab.");
+    await chrome.tabs.get(tabId); // A closed tab must never become a different active tab.
+    if ("tabId" in req && req.tabId !== tabId) throw new Error("This panel belongs to another tab.");
+    if ("sessionId" in req && req.sessionId) {
+      const session = await loadSession(req.sessionId);
+      if (!session || session.tabId !== tabId) throw new Error("This session belongs to another tab.");
+    }
+  }
   switch (req.kind) {
     case "list_providers":
       return { providers: BUILTIN_PROVIDERS };
@@ -337,20 +386,26 @@ async function handlePanelRequest(req: PanelRequest, sender: chrome.runtime.Mess
       all[req.providerId] = credentials;
       await writeEncryptedCredentials(all);
       await saveProviderModels(req.providerId, models);
-      const settings = await loadSettings();
+      const settings = await loadTabState(tabId!);
       const selectedModelId = (settings.providerId === req.providerId && models.find((m) => m.id === settings.modelId)?.id)
         || models.find((m) => m.id === def.defaultLargeModelId)?.id || models[0]?.id || "";
+      await saveTabState(tabId!, { providerId: req.providerId, modelId: selectedModelId });
       await saveSettings({ providerId: req.providerId, modelId: selectedModelId, initialized: true });
       return { models, selectedModelId };
     }
 
     case "select_model":
-      await saveSettings({ modelId: req.modelId });
+      await saveTabState(tabId!, { providerId: req.providerId, modelId: req.modelId });
+      return { ok: true };
+
+    case "set_draft":
+      if (typeof req.text !== "string") throw new Error("Invalid draft");
+      await saveTabState(tabId!, { draft: req.text });
       return { ok: true };
 
     case "set_autonomy":
       if (!["ask", "auto"].includes(req.mode)) throw new Error("Invalid autonomy mode");
-      await saveSettings({ autonomyMode: req.mode });
+      await saveTabState(tabId!, { autonomyMode: req.mode });
       return { ok: true, mode: req.mode };
 
     case "set_notifications":
@@ -385,15 +440,15 @@ async function handlePanelRequest(req: PanelRequest, sender: chrome.runtime.Mess
       if (req.sessionId) session = (await loadSession(req.sessionId)) ?? null;
       // 3. Any active session for this tab (session area).
       if (!session) {
-        session = (await listActiveSessions()).find((s) => s.tabId === req.tabId) ?? null;
+        session = (await sessionsForTab(req.tabId)).at(-1) ?? null;
       }
       return { session };
     }
 
     case "send_message": {
-      const settings = await loadSettings();
-      const providerId = settings.providerId;
-      const modelId = settings.modelId;
+      const settings = await loadTabState(req.tabId);
+      const providerId = req.providerId ?? settings.providerId;
+      const modelId = req.modelId ?? settings.modelId;
       if (!providerId || !modelId) throw new Error("no provider/model selected");
       // Detect the destructive "forget everything" intent BEFORE entering the
       // agent loop. We never want the model to act on the page after such a
@@ -405,9 +460,10 @@ async function handlePanelRequest(req: PanelRequest, sender: chrome.runtime.Mess
         return { ok: true, cleared: true, userMemory: facts, sessionId: null };
       }
       // Find or create a session for this tab.
-      const sessions = await listActiveSessions();
-      let session = sessions.find((s) => s.tabId === req.tabId);
-      if (!session || session.state === "done" || session.state === "error") {
+      const sessions = await sessionsForTab(req.tabId);
+      let session = sessions.find(isBusy) ?? sessions.at(-1);
+      if (!session || session.state === "error" || session.abortReason ||
+          (!isBusy(session) && (session.providerId !== providerId || session.modelId !== modelId))) {
         session = await newSession(req.tabId, providerId, modelId);
       }
       // If a run is already active on this session, QUEUE the message: it will
@@ -418,6 +474,8 @@ async function handlePanelRequest(req: PanelRequest, sender: chrome.runtime.Mess
         return { sessionId: session.sessionId, queued: true };
       }
       // Run in the background; events flow via onLoopEvent.
+      session.state = "attaching";
+      await saveSession(session);
       void run(session.sessionId, req.text);
       return { sessionId: session.sessionId, queued: false };
     }
@@ -459,8 +517,10 @@ async function handlePanelRequest(req: PanelRequest, sender: chrome.runtime.Mess
         const { loadSession } = await import("../core/storage");
         return { session: await loadSession(req.sessionId) };
       }
-      const sessions = await listActiveSessions();
-      const settings = await loadSettings();
+      const tabState = await loadTabState(tabId!);
+      const defaults = await loadSettings();
+      const settings = { ...defaults, providerId: tabState.providerId,
+        modelId: tabState.modelId, autonomyMode: tabState.autonomyMode };
       // Report which providers have stored credentials so the panel can show
       // the "configured" indicator on each provider chip.
       const { readWorkingCredentials } = await import("../core/storage");
@@ -474,23 +534,24 @@ async function handlePanelRequest(req: PanelRequest, sender: chrome.runtime.Mess
       // Include the global user memory so the panel can hydrate its memory
       // overlay on boot without a second round-trip.
       const { facts: userMemory } = await loadMemory();
-      return { sessions, settings, configuredProviders, userMemory };
+      const sessions = await sessionsForTab(tabId!);
+      const current = sessions.find(isBusy) ?? sessions.at(-1);
+      const pendingPermissions = current ? permissions.pendingForSession(current.sessionId)
+        .map(({ resolve: _resolve, ...request }) => request) : [];
+      return { sessions, settings, tabState, configuredProviders, userMemory, pendingPermissions,
+        planPending: !!current && planService.hasPending(current.sessionId) };
     }
 
     case "new_session": {
-      const settings = await loadSettings();
+      if ((await sessionsForTab(req.tabId)).some(isBusy)) throw new Error("Stop this tab's run before starting a new conversation.");
+      const settings = await loadTabState(req.tabId);
       if (!settings.providerId || !settings.modelId) throw new Error("no provider/model selected");
       const session = await newSession(req.tabId, settings.providerId, settings.modelId);
       return { sessionId: session.sessionId };
     }
 
     case "open_side_panel_for_tab":
-      await chrome.sidePanel.open({ tabId: req.tabId });
-      await chrome.sidePanel.setOptions({
-        tabId: req.tabId,
-        path: "panel.html",
-        enabled: true,
-      });
+      // Handled synchronously by the message listener to preserve the gesture.
       return { ok: true };
 
     case "selection_action": {
@@ -502,10 +563,7 @@ async function handlePanelRequest(req: PanelRequest, sender: chrome.runtime.Mess
       // Keep the draft until the panel has booted.
       pendingPrompts.set(tabId, { prompt, at: Date.now() });
       // Open the side panel for this tab.
-      await chrome.sidePanel.open({ tabId }).catch(() => {});
-      await chrome.sidePanel
-        .setOptions({ tabId, path: "panel.html", enabled: true })
-        .catch(() => {});
+      // The listener already began opening in the sender's gesture stack.
       // A content script can only suggest a draft, never start an agent run.
       await broadcast({ kind: "selection_draft", tabId }).catch(() => {});
       return { ok: true };
@@ -614,6 +672,8 @@ async function broadcast(evt: PanelEvent): Promise<void> {
 
 chrome.tabs?.onRemoved?.addListener((tabId) => {
   void (async () => {
+    await ready;
+    pendingPrompts.delete(tabId);
     const sessions = await listActiveSessions();
     for (const s of sessions) {
       if (s.tabId === tabId) {
@@ -621,6 +681,7 @@ chrome.tabs?.onRemoved?.addListener((tabId) => {
         cdpManager.notifyDetached(tabId, "tab_closed");
       }
     }
+    await deleteTabState(tabId);
   })();
 });
 
@@ -628,18 +689,13 @@ chrome.tabs?.onRemoved?.addListener((tabId) => {
 // Action + commands: open the side panel
 // ---------------------------------------------------------------------------
 
-chrome.runtime.onInstalled.addListener(async () => {
-  // Open the side panel on action click.
-  await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+chrome.action.onClicked.addListener((tab) => {
+  if (tab.id != null) void openTabPanel(tab.id).catch(console.error);
 });
 
-chrome.commands?.onCommand.addListener((command) => {
+chrome.commands?.onCommand.addListener((command, tab) => {
   if (command === "open-side-panel") {
-    chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
-      if (tab?.id != null) {
-        chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
-      }
-    });
+    if (tab?.id != null) void openTabPanel(tab.id).catch(console.error);
   }
 });
 

@@ -85,7 +85,7 @@ try {
   const tabId = await worker.evaluate(async (url) => (await chrome.tabs.query({})).find((t) => t.url === url + '/')?.id, baseURL);
   assert(tabId);
   const newPage = ctx.waitForEvent('page');
-  await worker.evaluate((url) => chrome.tabs.create({ url, active: false }), `chrome-extension://${id}/panel.html`);
+  await worker.evaluate((url) => chrome.tabs.create({ url, active: false }), `chrome-extension://${id}/panel.html?tabId=${tabId}`);
   const panel = await newPage;
   panel.on('pageerror', (e) => browserErrors.push(e.message));
   await panel.waitForLoadState();
@@ -96,7 +96,7 @@ try {
   await send({ kind: 'set_notifications', enabled: false });
   const connected = await send({ kind: 'connect_provider', providerId: 'custom', credentials: { baseURL: baseURL + '/v1', apiKey: 'mock-secret' } });
   assert.equal(connected.ok, true, JSON.stringify(connected));
-  await send({ kind: 'select_model', modelId: 'mock-selected' });
+  await send({ kind: 'select_model', providerId: 'custom', modelId: 'mock-selected' });
   assert.equal(requests.length, 0, 'connection must not issue a chat probe to a guessed model');
   await panel.reload();
   await panel.waitForLoadState();
@@ -255,6 +255,153 @@ try {
     secondSite.closeAllConnections();
     await new Promise((r) => secondSite.close(r));
   }
+  // Each panel is owned by one tab, including when booting with a different
+  // tab active. Use actual sidePanel configuration as well as separate UI pages.
+  await target.goto(baseURL);
+  await target.locator('h1').evaluate((el) => { el.textContent = 'Only tab A content'; });
+  const other = await ctx.newPage();
+  await other.goto(baseURL + '/other');
+  await other.locator('h1').evaluate((el) => { el.textContent = 'Only tab B content'; });
+  const otherId = await worker.evaluate(async (url) => (await chrome.tabs.query({})).find((t) => t.url === url)?.id, other.url());
+  assert(otherId && otherId !== tabId);
+  assert.equal((await worker.evaluate(() => chrome.sidePanel.getOptions({}))).enabled, false);
+  assert.equal((await worker.evaluate((tabId) => chrome.sidePanel.getOptions({ tabId }), otherId)).enabled, false);
+  const openNativePanel = async (page, owner) => {
+    await page.evaluate((tabId) => {
+      const button = document.createElement('button');
+      button.id = 'test-native-open';
+      button.textContent = 'Open tab panel';
+      button.onclick = async () => {
+        button.dataset.result = JSON.stringify(await chrome.runtime.sendMessage({ kind: 'open_side_panel_for_tab', tabId }));
+      };
+      document.body.appendChild(button);
+    }, owner);
+    await page.locator('#test-native-open').click();
+    const result = JSON.parse(await until(() => page.locator('#test-native-open').getAttribute('data-result'), 'native open from real click'));
+    await page.locator('#test-native-open').evaluate((el) => el.remove());
+    return result;
+  };
+  const opened = await openNativePanel(panel, tabId);
+  assert.equal(opened.ok, true, JSON.stringify(opened));
+  const optionsA = await worker.evaluate((tabId) => chrome.sidePanel.getOptions({ tabId }), tabId);
+  assert.equal(optionsA.path, `panel.html?tabId=${tabId}`);
+  assert.equal(optionsA.enabled, true);
+  await target.bringToFront();
+  await until(() => worker.evaluate(async (owner) => (await chrome.runtime.getContexts({ contextTypes: ['SIDE_PANEL'] }))
+    .some((c) => c.documentUrl.endsWith(`panel.html?tabId=${owner}`)), tabId), 'native A side panel instance');
+  assert.equal((await worker.evaluate((tabId) => chrome.sidePanel.getOptions({ tabId }), otherId)).enabled, false);
+
+  await panel.locator('#composer').fill('Draft for tab A only');
+  await until(async () => (await send({ kind: 'get_state' })).data.tabState.draft === 'Draft for tab A only', 'save A draft');
+  await other.bringToFront();
+  await panel.reload();
+  await until(() => panel.locator('#send-btn').isEnabled(), 'restore A while B is active');
+  await panel.evaluate(() => chrome.runtime.onMessage.addListener((msg) => { window.recordExtensionEvent(msg); }));
+  assert.equal(await panel.locator('html').getAttribute('data-tab-id'), String(tabId));
+  assert.equal(await panel.locator('#composer').inputValue(), 'Draft for tab A only');
+  assert((await panel.locator('#messages').textContent()).includes('Run fixture test'));
+
+  const nextPage = ctx.waitForEvent('page');
+  await worker.evaluate((url) => chrome.tabs.create({ url, active: false }), `chrome-extension://${id}/panel.html?tabId=${otherId}`);
+  const panelB = await nextPage;
+  panelB.on('pageerror', (e) => browserErrors.push(e.message));
+  await until(() => panelB.locator('#send-btn').isEnabled(), 'independent B panel boot');
+  const sendB = (msg) => panelB.evaluate((message) => chrome.runtime.sendMessage(message), msg);
+  assert.equal((await sendB({ kind: 'get_state' })).data.sessions.length, 0);
+  assert(!(await panelB.locator('#messages').textContent()).includes('Run fixture test'));
+  assert.equal(await panelB.locator('#composer').inputValue(), '');
+  await panelB.locator('#composer').fill('Draft for tab B only');
+  await panelB.locator('#model-select').selectOption('mock-first');
+  await until(async () => (await sendB({ kind: 'get_state' })).data.settings.modelId === 'mock-first', 'B model selection');
+  assert.equal((await send({ kind: 'get_state' })).data.settings.modelId, 'mock-selected');
+  assert.equal((await sendB({ kind: 'get_state' })).data.settings.autonomyMode, 'ask');
+  assert.equal((await send({ kind: 'get_state' })).data.settings.autonomyMode, 'auto');
+  assert.equal((await openNativePanel(panelB, otherId)).ok, true);
+  assert.equal((await worker.evaluate((tabId) => chrome.sidePanel.getOptions({ tabId }), otherId)).path, `panel.html?tabId=${otherId}`);
+  console.log('PASS: no global panel; distinct native tab paths; owner, conversation, model and draft survive switching/reload');
+
+  // Hold A at approval while B executes on its own document with its own model.
+  await send({ kind: 'set_autonomy', mode: 'ask' });
+  sessionId = await start([{ name: 'navigate', input: { url: baseURL + '/never-visited' } }], 'Task only in tab A');
+  const pendingA = await until(() => events.find((e) => e.kind === 'permission_request' && e.name === 'navigate'), 'A approval');
+  const firstBRequest = requests.length;
+  toolsToReturn = [{ name: 'snapshot', input: {} }];
+  await panelB.locator('#composer').fill('Task only in tab B');
+  await panelB.locator('#send-btn').click();
+  const sessionB = await until(async () => (await sendB({ kind: 'get_state' })).data.sessions.at(-1), 'B session');
+  await until(async () => (await sendB({ kind: 'get_state', sessionId: sessionB.sessionId })).data.session.state === 'done', 'B completes independently');
+  assert(requests.slice(firstBRequest).every((r) => r.model === 'mock-first'));
+  const historyB = JSON.stringify((await sendB({ kind: 'get_state', sessionId: sessionB.sessionId })).data.session.history);
+  assert(historyB.includes('Only tab B content'));
+  assert(!historyB.includes('Only tab A content') && !historyB.includes('Task only in tab A'));
+  assert(!(await panel.locator('#messages').textContent()).includes('Task only in tab B'));
+  assert.equal(await panelB.locator('.card.permission').count(), 0);
+  for (const request of [
+    { kind: 'send_message', tabId, text: 'Wrong target' },
+    { kind: 'get_state', sessionId },
+    { kind: 'stop', sessionId },
+    { kind: 'permission_decision', sessionId, toolCallId: pendingA.toolCallId, decision: 'allow' },
+  ]) assert.equal((await sendB(request)).ok, false, request.kind);
+  assert.equal((await send({ kind: 'get_state', sessionId })).data.session.state, 'awaiting_permission');
+  await panel.reload();
+  await until(() => panel.locator('#send-btn').isEnabled(), 'restore A approval');
+  assert.equal(await panel.locator('.card.permission').count(), 1);
+  assert.equal(await panel.locator('#stop-btn').isVisible(), true);
+  await panel.getByRole('button', { name: 'Deny', exact: true }).click();
+  await finished(sessionId);
+  assert.equal(target.url(), baseURL + '/');
+
+  // A follow-up must use B's conversation even after A has been active.
+  await target.bringToFront();
+  await panelB.reload();
+  await until(() => panelB.locator('#send-btn').isEnabled(), 'restore B conversation');
+  assert((await panelB.locator('#messages').textContent()).includes('Task only in tab B'));
+  await panelB.locator('#composer').fill('Follow up only in tab B');
+  await panelB.locator('#send-btn').click();
+  await until(() => requests.at(-1).messages.some((m) => typeof m.content === 'string' && m.content.includes('Follow up only in tab B')), 'B follow-up request');
+  await until(async () => (await sendB({ kind: 'get_state', sessionId: sessionB.sessionId })).data.session.state === 'done', 'B follow-up completes');
+  assert.equal((await sendB({ kind: 'get_state' })).data.sessions.at(-1).sessionId, sessionB.sessionId);
+  assert(JSON.stringify(requests.at(-1).messages).includes('Task only in tab B'));
+  assert(!JSON.stringify(requests.at(-1).messages).includes('Task only in tab A'));
+  console.log('PASS: concurrent tabs keep requests, histories and approvals separate; reopens restore approvals and follow-up context');
+
+  sessionId = await start([{ name: 'propose_plan', input: { steps: [{ title: 'Keep A pending' }] } }], 'A remains open when B closes');
+  await until(async () => (await send({ kind: 'get_state' })).data.planPending, 'A pending plan');
+  toolsToReturn = [{ name: 'navigate', input: { url: baseURL + '/never-visited-b' } }];
+  await sendB({ kind: 'send_message', tabId: otherId, text: 'B closes during its run' });
+  await until(async () => (await sendB({ kind: 'get_state' })).data.pendingPermissions.length === 1, 'B pending action');
+  await other.close();
+  await until(async () => {
+    const storage = await worker.evaluate(() => chrome.storage.session.get(null));
+    return !storage[`agent.tab.${otherId}`] && !Object.values(storage).some((v) => v?.tabId === otherId);
+  }, 'closing B removes only B session data');
+  assert((await send({ kind: 'get_state' })).data.sessions.length > 0);
+  assert.equal((await send({ kind: 'get_state' })).data.planPending, true);
+  await panel.reload();
+  await until(() => panel.locator('#send-btn').isEnabled(), 'restore A plan after B closes');
+  assert.equal(await panel.locator('.card.plan').count(), 1);
+  await panel.locator('#stop-btn').click();
+  await finished(sessionId);
+  assert.equal(await panel.locator('.card.plan').count(), 0);
+  const afterClose = await worker.evaluate(() => chrome.storage.session.get(null));
+  assert(!afterClose[`agent.tab.${otherId}`]);
+  assert(!Object.values(afterClose).some((v) => v?.tabId === otherId), 'cancelled run must not recreate a closed tab session');
+  assert.equal((await sendB({ kind: 'send_message', tabId: otherId, text: 'Closed tab' })).ok, false);
+  console.log('PASS: closing a tab cancels and clears its run; another tab keeps its plan and can stop independently');
+  let releaseReply;
+  const replyGate = new Promise((resolve) => { releaseReply = resolve; });
+  beforeNextReply = () => replyGate;
+  const rapid = await Promise.all([
+    send({ kind: 'send_message', tabId, text: 'Rapid first message' }),
+    send({ kind: 'send_message', tabId, text: 'Rapid second message' }),
+  ]);
+  releaseReply();
+  assert(rapid.every((r) => r.ok));
+  assert.equal(rapid[0].data.sessionId, rapid[1].data.sessionId);
+  assert.equal(rapid.filter((r) => r.data.queued).length, 1);
+  await until(() => requests.some((r) => JSON.stringify(r.messages).includes('Rapid second message')), 'rapid second message reaches same conversation');
+  await finished(rapid[0].data.sessionId);
+  console.log('PASS: rapid sends share one tab session and queue instead of starting competing runs');
   assert.equal(browserErrors.length, 0, JSON.stringify(browserErrors));
   console.log('PASS: screenshot reaches model; no transcripts/plaintext API key persisted; no panel JS errors');
 } finally {

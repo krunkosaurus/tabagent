@@ -36,7 +36,7 @@ import {
   deleteSession,
   loadSession,
   saveSession,
-  loadSettings,
+  loadTabState,
   loadProviderModels,
   saveProviderModels,
   type UserFact,
@@ -116,6 +116,7 @@ function emit(e: LoopEvent) {
 // ---------------------------------------------------------------------------
 
 const abortControllers = new Map<string, AbortController>();
+const removedSessions = new Set<string>();
 
 /**
  * The in-memory Session object a running loop is mutating. Set when run()
@@ -200,6 +201,7 @@ export async function getSession(sessionId: string): Promise<Session | undefined
 
 export async function run(sessionId: string, userText: string): Promise<void> {
   let s = await loadSession(sessionId);
+  if (removedSessions.has(sessionId)) return;
   if (!s) {
     emit({ type: "error", sessionId, message: "session not found" });
     return;
@@ -219,6 +221,16 @@ export async function run(sessionId: string, userText: string): Promise<void> {
   s.abortReason = null;
   s.plan = null;
   s.planApprovedRunId = null;
+  // A denied origin or interrupted run can end with unanswered tool calls.
+  // Complete their wire history before continuing the same tab's conversation.
+  const unanswered = new Map<string, string>();
+  for (const message of s.history) for (const part of message.parts) {
+    if (part.type === "tool_call") unanswered.set(part.id, part.name);
+    if (part.type === "tool_result") unanswered.delete(part.toolCallId);
+  }
+  if (unanswered.size) s.history = [...s.history, toolMessage([...unanswered].map(([toolCallId, name]) => ({
+    toolCallId, name, content: "The previous run ended before this action completed.", isError: true,
+  })))];
   s.history = [...s.history, message("user", [{ type: "text", text: userText }])];
 
   const controller = new AbortController();
@@ -506,7 +518,7 @@ async function loop(s: Session, signal: AbortSignal): Promise<void> {
       }
       // Plan approval never overrides tool permissions. Navigation always asks,
       // including Auto mode and previously granted origins.
-      const settings = await loadSettings();
+      const settings = await loadTabState(s.tabId);
       const alwaysAsk = !!parsed.toolDef.meta.requiresPermission;
       const needsPerm = alwaysAsk || ((settings.autonomyMode ?? "ask") === "ask" &&
         toolNeedsPermission(parsed.tool, parsed.toolName));
@@ -615,7 +627,7 @@ async function streamOnce(s: Session, signal: AbortSignal): Promise<StreamOutcom
   // In "ask" mode the model must propose a plan first; we offer the propose_plan
   // control tool. Once the plan is approved this run, we drop propose_plan from
   // the tools and tell the model to proceed, keeping individual action checks.
-  const settings = await loadSettings();
+  const settings = await loadTabState(s.tabId);
   const mode = settings.autonomyMode ?? "ask";
   const planApproved = mode === "ask" && s.planApprovedRunId === s.runId;
   // Preload the user memory once per turn (cheap read from storage.local) so
@@ -1189,12 +1201,17 @@ export async function resolveInterrupted(
 // ---------------------------------------------------------------------------
 
 async function checkpoint(s: Session): Promise<void> {
+  if (removedSessions.has(s.sessionId)) return;
   // Bound history size so long sessions don't blow the storage quota. We drop
   // the OLDEST completed turns (user+assistant+tool messages) while keeping a
   // recent window of at least MIN_HISTORY_MESSAGES. The system prompt is not
   // stored in history (it's re-added at request time), so trimming is safe.
   trimHistory(s);
   await saveSession(s);
+  if (removedSessions.has(s.sessionId)) {
+    await deleteSession(s.sessionId);
+    return;
+  }
   emit({ type: "state", session: s });
 }
 
@@ -1248,7 +1265,10 @@ async function siteOf(tabId: number): Promise<string> {
 }
 
 export async function removeSession(sessionId: string): Promise<void> {
+  removedSessions.add(sessionId);
   abortControllers.get(sessionId)?.abort();
+  permissions.abortSession(sessionId);
+  planService.abortSession(sessionId);
   await deleteSession(sessionId);
 }
 

@@ -8,7 +8,7 @@ import type { Manifest } from "./manifest-type";
 const manifest: Manifest = {
   manifest_version: 3,
   name: "TabAgent",
-  version: "0.1.7",
+  version: "0.1.8",
   description:
     "Universal AI browser agent. Connect any OpenAI-compatible provider (Z.AI coding plan, OpenAI, OpenRouter, Ollama, ...) and let the AI drive the active tab.",
   minimum_chrome_version: "120",
@@ -16,7 +16,6 @@ const manifest: Manifest = {
   background: { service_worker: "background.js" },
   action: {
     default_title: "Open TabAgent",
-    default_popup: "popup.html",
     default_icon: {
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png",
@@ -30,7 +29,6 @@ const manifest: Manifest = {
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png",
   },
-  side_panel: { default_path: "panel.html" },
   permissions: [
     "sidePanel",
     "offscreen",
@@ -50,7 +48,7 @@ const manifest: Manifest = {
   commands: {
     "_execute_action": {
       suggested_key: { default: "Ctrl+Shift+Y", mac: "Command+Shift+Y" },
-      description: "Open the agent popup",
+      description: "Open the agent for this tab",
     },
     "open-side-panel": {
       suggested_key: { default: "Ctrl+Shift+A", mac: "Command+Shift+A" },

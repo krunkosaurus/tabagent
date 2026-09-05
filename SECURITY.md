@@ -20,6 +20,7 @@ certification, a comprehensive penetration test, or an evaluation of model quali
 | Provider setup validated before obtaining host permission, and guessed a model for validation. Dynamic model selections fell back to seeded models or failed. | Request permission first in the click handler. Most providers validate with `/models`; retain Z.AI's special chat probe. Cache the discovered model list and use the selected ID. |
 | Origin checks parsed an empty `Tab.url` when Chrome withheld tab metadata, causing an `Invalid URL` crash. | Read the top-level frame URL through the run's existing debugger attachment. The regression test uses a target host without host permissions, and verifies cross-origin approval in that condition. |
 | Saved custom connections had no editor. | Provide an editor with non-secret endpoint metadata. Blank keys can retain an existing key only for the unchanged address; address changes require an explicit replacement or removal. Block editing while the provider is in use by a run. |
+| A global side panel followed tab switches and inferred its target from the active tab at boot; model/autonomy choices were global. | Use a tab-specific panel URL with an immutable owner, validate requested tabs/sessions against it, and store each tab's choices and draft in session storage. Reopening restores only that tab's history and approvals. Closing a tab aborts its pending decisions and prevents its run from recreating deleted checkpoints. |
 | Tool results could lack matching assistant tool calls; screenshots were replaced with placeholders before the model saw them. | Preserve tool-call history and send screenshots as image attachments; omit screenshot bytes only from checkpoint copies. |
 | esbuild 0.24.x had a known development-server vulnerability. | Update to esbuild 0.28.2; dependency audit reports zero known vulnerabilities. This project did not use the vulnerable development server. |
 
@@ -35,7 +36,8 @@ operates locally.
 API keys remain recoverable by someone who can read your Chrome profile, because
 the encryption key is stored with the ciphertext. Do not interpret AES-GCM as an
 OS keychain or passphrase vault. Credentials, grants, settings and manual notes
-persist locally; conversations end on browser exit. Exports are explicit plaintext
+persist locally; conversations and per-tab drafts end on tab closure, browser exit,
+or extension reload/update. Exports are explicit plaintext
 JSON files. On upgrade, export old conversations before loading this build if
 you need to retain them.
 
@@ -50,7 +52,7 @@ message submission, deletion or secret.
 
 Use Ask mode, supervise actions, and prefer a separate Chrome profile containing
 only the accounts needed for the task. This is not ready for unattended sensitive
-account administration. It is single-tab, has no reliable spend budget, and does
+account administration. Each agent controls one tab, has no reliable spend budget, and does
 not use an existing Claude browser subscription. Native Anthropic support is
 still unimplemented; Claude models require a compatible provider such as
 OpenRouter. Model quality, real API compatibility and cost need validation with
@@ -71,6 +73,10 @@ your chosen provider.
   snapshot and typing in an isolated world, escaped plan HTML, action approval
   after plan approval, Auto navigation, cross-origin read gating, image delivery,
   disk storage checks and panel JavaScript errors.
+  Also covers native tab-specific panel creation from a real click, switching and
+  reopening panels, separate model/autonomy choices and drafts, concurrent tab
+  runs, rejected cross-tab control requests, restored approvals and follow-up
+  context, and cancellation/cleanup when one tab closes.
 - `npm audit --ignore-scripts`: zero known dependency vulnerabilities at review.
 
 The browser test copy pre-grants access to loopback for CI; the actual distribution
@@ -81,6 +87,7 @@ the user's browser profile and live paid providers were not exercised.
 
 - [Chrome storage access levels](https://developer.chrome.com/docs/extensions/reference/api/storage/)
 - [Chrome tab URL visibility](https://developer.chrome.com/docs/extensions/reference/api/tabs#property-Tab-url)
+- [Chrome tab-specific side panels](https://developer.chrome.com/docs/extensions/reference/api/sidePanel)
 - [Debugger frame tree](https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-getFrameTree)
 - [Chrome message-passing security guidance](https://developer.chrome.com/docs/extensions/develop/concepts/messaging#security-considerations)
 - [Chromium extension security FAQ, including debugger privileges](https://chromium.googlesource.com/chromium/src/+/main/extensions/docs/security_faq.md)

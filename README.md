@@ -1,6 +1,6 @@
 # TabAgent
 
-> A supervised AI agent for one browser tab.
+> A supervised AI agent with an independent instance for each browser tab.
 
 Build from source using the instructions below to include the latest security and reliability fixes. See [the security review](SECURITY.md) for data flows, validation and remaining limitations.
 
@@ -28,6 +28,7 @@ https://github.com/user-attachments/assets/2adfd956-d6e8-4b5c-893d-dc04f92abe66
 - **Plan approval** — the agent can propose a step-by-step plan; you approve or reject it, then watch steps tick off live in the panel
 - **Permission system** — per-site grants (site-wide or per-tool), plus **ask**/**auto** autonomy modes
 - **Mid-run steering** — queue follow-up messages while the agent is working; they're folded into the run
+- **Independent tabs** — open TabAgent separately on each tab. Conversations, drafts, model choices, autonomy mode and pending approvals stay with their tab; a run continues on its original tab while you browse elsewhere.
 - **Manual saved notes** — add, edit or delete notes in the Memory panel. Automatic extraction and model-written memory have been removed.
 - **Skills** — keyword-activated expert procedures; ships with full-page translation via in-place text replacement with automatic LTR/RTL handling
 - **Selection drafts** — on an explicitly activated tab, selected text can fill a draft. Review it and press Send in the panel.
@@ -53,7 +54,7 @@ npm run build
 
 To edit the current connection, click **Edit connection** directly below the
 panel header. The version beside it identifies the loaded build (currently
-**v0.1.7**). To edit another saved provider, open the provider picker and use its
+**v0.1.8**). To edit another saved provider, open the provider picker and use its
 **Edit connection** button. Change the base URL or API key
 and click **Save changes**. An empty key field keeps the existing key when the
 server address is unchanged. For a different address, explicitly enter that
@@ -61,13 +62,25 @@ server's key or select **Use without an API key**. Saving preserves your model
 selection if the server still lists it. Use the top model dropdown to change
 models. Stop any active run before editing its connection.
 
+Open TabAgent on a tab using its toolbar icon or keyboard shortcut. Switching to
+a tab where you have not opened it hides the panel; returning brings back that
+tab's panel. Opening it on another tab starts an independent conversation. Closing
+and reopening a panel restores that tab's conversation, draft and pending approvals
+within the current browser session. Closing the browser tab cancels its run and
+clears its conversation and draft. API connections, manual notes, saved site grants,
+theme and notifications are shared across tabs.
+
 For Claude models, choose **OpenRouter** and select a Claude model from its live list. This requires an OpenRouter API key and any applicable API billing; a Claude browser subscription cannot be used as the credential. The native Anthropic adapter is still unimplemented.
 
 For a local model, choose **Custom**, use your running server's OpenAI-compatible base URL (for example `http://localhost:11434/v1`), and choose an installed model that supports tool calling. Remote providers require HTTPS; HTTP is allowed only on loopback. Nothing contacts a provider until you explicitly connect or use it.
 
 Review the exact URL/text in each action prompt. Plan approval keeps individual action checks in place. Navigation and entering a new origin require approval even in Auto mode. Site grants apply to the full origin (scheme, hostname and port).
 
-Conversations are kept in memory and cleared on browser exit. Export a conversation explicitly if you want to retain it. On upgrade, this build removes old disk checkpoint mirrors; export anything you need with the previous build first. Credentials, settings, site grants and manually saved notes still persist locally.
+Conversations and drafts are kept in memory and cleared when their tab closes,
+Chrome exits, or the extension is reloaded or updated. Export a conversation
+explicitly if you want to retain it. On upgrade, this build removes old disk
+checkpoint mirrors; export anything you need with the previous build first.
+Credentials, settings, site grants and manually saved notes still persist locally.
 
 ## Providers
 
@@ -116,7 +129,7 @@ The agent loop also offers `propose_plan` and `suggest_actions`. Durable notes c
 ## How it works
 
 ```
-Side panel (UI only)
+Tab-specific side panel (UI only, fixed owner tab)
       ↕  chrome.runtime messages
 Service worker (orchestrator)
    ├─ Agent loop — resumable state machine
@@ -124,7 +137,7 @@ Service worker (orchestrator)
    ├─ Permission & plan-approval services
    └─ chrome.alarms heartbeat (recovery)
       ↕  chrome.debugger (CDP)
-Active tab (debuggee)
+Owner tab (debuggee, remains fixed when switching tabs)
 ```
 
 The loop (`src/background/loop.ts`) checkpoints progress during a run. Recovery is limited to the current browser session:
@@ -136,6 +149,9 @@ The loop (`src/background/loop.ts`) checkpoints progress during a run. Recovery 
 The debugger attaches when a run starts and detaches when it finishes. While attached, it also keeps the service worker alive for the duration of the run (Chrome 118+ behavior).
 
 There are no runtime dependencies: SSE parsing, markdown rendering, and crypto are implemented in-repo, and the UI is vanilla TypeScript.
+
+See [the tab-instance architecture](docs/architecture.md) for panel ownership,
+state restoration, concurrent runs and tab cleanup.
 
 ## The debugger permission
 
@@ -164,7 +180,7 @@ See [SECURITY.md](SECURITY.md) for findings, validation and limits.
 - **Anthropic native adapter** is a stub (use OpenRouter for Claude); **no Gemini adapter**
 - **Pause is cancel** — true mid-run pause/resume is not implemented yet
 - **No cost tracking** — the default Z.AI plan is flat-rate; per-token accounting is absent elsewhere
-- **Single tab** — multi-tab orchestration is designed for but not built
+- **One tab per agent** — independent tabs can run concurrently; a single agent cannot orchestrate multiple tabs
 - **Offscreen streaming path** is implemented but dormant; the loop currently streams inside the service worker (safe because the attached debugger keeps it alive)
 - **No prompt-injection classifier** (see [Security & privacy](#security--privacy))
 - **Vanilla TS UI** — no framework

@@ -45,6 +45,15 @@ try {
   assert(!local.has('agent.session.abc'));
   assert.equal(live.history[0].parts[0].content, 'data:image/jpeg;base64,abc');
   assert(!JSON.stringify(await m.loadSession('abc')).includes('base64,abc'));
+  await m.saveSettings({ providerId: 'custom', modelId: 'initial' });
+  await m.loadTabState(1);
+  await m.loadTabState(2);
+  await Promise.all([m.saveTabState(1, { draft: 'Tab one draft' }), m.saveTabState(1, { modelId: 'one', autonomyMode: 'auto' })]);
+  assert.deepEqual(await m.loadTabState(1), { providerId: 'custom', modelId: 'one', autonomyMode: 'auto', draft: 'Tab one draft' });
+  assert.deepEqual(await m.loadTabState(2), { providerId: 'custom', modelId: 'initial', autonomyMode: 'ask', draft: '' });
+  assert(!JSON.stringify([...local]).includes('Tab one draft'));
+  await m.deleteTabState(1);
+  assert(!session.has('agent.tab.1'));
   console.log('PASS: storage isolation, credential round trip, memory-only checkpoints');
 
   for (const url of ['javascript:alert(1)', 'data:text/html,test', 'file:///tmp/a', 'chrome://settings', 'https://user:pw@example.com']) {
@@ -59,7 +68,10 @@ try {
   assert(!m.isBackground(bad));
   assert(m.isSelectionSender(bad));
   assert(!m.isSelectionSender({ ...bad, id: 'other-extension' }));
-  assert(m.isExtensionPage({ id: 'test', url: chrome.runtime.getURL('panel.html') }, ['panel.html']));
+  assert(m.isExtensionPage({ id: 'test', url: chrome.runtime.getURL('panel.html?tabId=2') }, ['panel.html']));
+  for (const path of ['panel.html', 'panel.html?tabId=0', 'panel.html?tabId=2&tabId=3', 'panel.html?tabId=2#other', 'panel.html?tabId=NaN']) {
+    assert(!m.isExtensionPage({ id: 'test', url: chrome.runtime.getURL(path) }, ['panel.html']));
+  }
   console.log('PASS: URL restrictions and sender boundaries');
 
   await m.saveSettings({ permissionGrants: { 'https://example.com::*': true } });
@@ -116,6 +128,7 @@ try {
   assert(!html.includes('href="javascript:'));
   const manifest = JSON.parse(await readFile('dist/manifest.json', 'utf8'));
   assert.deepEqual(manifest.host_permissions, []);
+  assert(!manifest.side_panel, 'no global panel may follow the active tab');
   assert(!manifest.content_scripts);
   assert(!manifest.web_accessible_resources);
   assert(!manifest.content_security_policy.extension_pages.includes('unsafe-eval'));

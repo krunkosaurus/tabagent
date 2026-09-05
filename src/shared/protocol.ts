@@ -25,9 +25,10 @@ export type PanelRequest =
   | { kind: "list_providers" }
   | { kind: "list_models"; providerId: string }
   | { kind: "seed_models"; providerId: string }
-  | { kind: "select_model"; modelId: string }
+  | { kind: "select_model"; providerId: string; modelId: string }
+  | { kind: "set_draft"; text: string }
   | { kind: "set_autonomy"; mode: "ask" | "auto" }
-  | { kind: "send_message"; tabId: number; text: string }
+  | { kind: "send_message"; tabId: number; text: string; providerId?: string; modelId?: string }
   | { kind: "stop"; sessionId: string }
   | { kind: "pause"; sessionId: string }
   | { kind: "resume"; sessionId: string }

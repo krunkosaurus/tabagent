@@ -1,4 +1,6 @@
 /** Shared trust boundaries. Web content and model output are untrusted. */
+import { panelTabId } from "../shared/panel-target";
+
 export function webURL(value: string): URL {
   let url: URL;
   try { url = new URL(value); } catch {
@@ -22,7 +24,9 @@ export function providerURL(value: string): URL {
 
 export function isExtensionPage(sender: chrome.runtime.MessageSender, pages: string[]): boolean {
   if (sender.id !== chrome.runtime.id || sender.frameId && sender.frameId !== 0) return false;
-  return pages.some((page) => sender.url === chrome.runtime.getURL(page));
+  return pages.some((page) => page === "panel.html"
+    ? panelTabId(sender.url) !== undefined
+    : sender.url === chrome.runtime.getURL(page));
 }
 
 export function isBackground(sender: chrome.runtime.MessageSender): boolean {

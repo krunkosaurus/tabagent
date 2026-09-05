@@ -1,4 +1,5 @@
 import { isBackground, providerURL } from "../core/security";
+import { panelTabId } from "../shared/panel-target";
 /**
  * Side panel UI (vanilla TS).
  *
@@ -22,7 +23,7 @@ import type {
   SuggestedAction,
 } from "../core/types";
 import type { PanelEvent, PanelRequest } from "../shared/protocol";
-import type { UserFact, UserFactCategory } from "../core/storage";
+import type { TabState, UserFact, UserFactCategory } from "../core/storage";
 import { messageText } from "../core/messages";
 import { renderMarkdown } from "./markdown";
 
@@ -71,13 +72,25 @@ const state: PanelState = {
   tabId: 0,
 };
 
+let booting = true;
+const bootEvents: PanelEvent[] = [];
+const renderedMessages = new Set<string>();
+
 // ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
 
 async function boot(): Promise<void> {
   $("build-version").textContent = `v${chrome.runtime.getManifest().version}`;
-  state.tabId = (await chrome.tabs.query({ active: true, currentWindow: true }))[0]?.id ?? 0;
+  const tabId = panelTabId(location.href);
+  if (tabId === undefined) {
+    setNotice("Open TabAgent from the toolbar on the tab you want to use.", true);
+    ($("send-btn") as HTMLButtonElement).disabled = true;
+    return;
+  }
+  state.tabId = tabId;
+  document.documentElement.dataset.tabId = String(tabId);
+  ($("send-btn") as HTMLButtonElement).disabled = true;
   startHeartbeat();
   listenForEvents();
   await refreshProviders();
@@ -115,6 +128,25 @@ async function boot(): Promise<void> {
     renderModelSelect();
   }
   render();
+  // Chrome can destroy and recreate a hidden tab's panel. Restore only its
+  // conversations and pending decisions, using a fresh snapshot after discovery.
+  const snapshot = await send<SettingsResponse>({ kind: "get_state" });
+  restoreTab(snapshot);
+  booting = false;
+  const cutoff = new Map<string, number>();
+  for (let i = 0; i < bootEvents.length; i++) {
+    const event = bootEvents[i];
+    if (event.kind === "session_state" && snapshot.sessions?.some((s) =>
+      s.sessionId === event.session.sessionId && s.updatedAt >= event.session.updatedAt)) {
+      cutoff.set(event.session.sessionId, i);
+    }
+  }
+  for (const [i, event] of bootEvents.splice(0).entries()) {
+    const sessionId = event.kind === "session_state" ? event.session.sessionId
+      : "sessionId" in event ? event.sessionId : undefined;
+    if (!sessionId || i > (cutoff.get(sessionId) ?? -1)) await handleEvent(event);
+  }
+  ($("send-btn") as HTMLButtonElement).disabled = false;
   maybeShowEmptyState();
   // Enable selections on this explicitly activated tab and retrieve drafts.
   void chrome.scripting.executeScript({ target: { tabId: state.tabId }, files: ["selection.js"] }).catch(() => {});
@@ -141,6 +173,7 @@ async function loadPendingDraft(): Promise<void> {
 async function refreshModels(providerId: string): Promise<void> {
   try {
     const resp = await send<{ models: Model[] }>({ kind: "list_models", providerId });
+    if (state.providerId !== providerId) return;
     if (Array.isArray(resp?.models) && resp.models.length > 0) {
       state.models = resp.models;
       // Keep the saved selection when it's still served; else fall back to the
@@ -153,6 +186,7 @@ async function refreshModels(providerId: string): Promise<void> {
           state.models[0]?.id;
       }
       renderModelSelect();
+      if (state.modelId) await send({ kind: "select_model", providerId, modelId: state.modelId });
     }
   } catch {
     /* credentials may not be unlocked yet, or no creds stored; keep placeholder */
@@ -160,6 +194,10 @@ async function refreshModels(providerId: string): Promise<void> {
 }
 
 interface SettingsResponse {
+  sessions?: Session[];
+  tabState?: TabState;
+  pendingPermissions?: Extract<PanelEvent, { kind: "permission_request" }>[];
+  planPending?: boolean;
   settings?: {
     providerId?: string;
     modelId?: string;
@@ -170,6 +208,44 @@ interface SettingsResponse {
   };
   configuredProviders?: string[];
   userMemory?: UserFact[];
+}
+
+function restoreTab(snapshot: SettingsResponse): void {
+  const sessions = (snapshot.sessions ?? []).filter((s) => s.tabId === state.tabId);
+  for (const session of sessions) {
+    for (const message of session.history) {
+      if (message.role === "tool") {
+        for (const part of message.parts) if (part.type === "tool_result") {
+          appendToolResult(part.name, part.content, part.isError);
+        }
+      } else {
+        appendReasoningFromMessage(message);
+        appendMessage(message);
+      }
+    }
+  }
+  const current = sessions.find((s) => !["idle", "done", "error", "paused"].includes(s.state)) ?? sessions.at(-1);
+  if (current) {
+    state.sessionId = current.sessionId;
+    renderState(current.state);
+    for (const queued of current.messageQueue) {
+      appendMessage({ id: queued.id, role: "user", parts: [{ type: "text", text: queued.text }], createdAt: queued.createdAt });
+    }
+    onQueueUpdate(current.messageQueue.length);
+    if (current.plan && (snapshot.planPending || current.plan.approvedAt)) {
+      showPlanCard(current.plan.planId, current.plan.steps, !!snapshot.planPending);
+    }
+    if (current.state === "error" && current.abortReason) appendError(current.abortReason);
+    if (current.state === "paused" && current.pendingStep?.kind === "tool") {
+      showInterruptedCard(current.sessionId, current.pendingStep.toolCalls);
+    }
+    if (state.isBusy && !["awaiting_permission", "awaiting_plan_approval"].includes(current.state)) showTyping();
+  }
+  for (const request of snapshot.pendingPermissions ?? []) {
+    showPermissionCard(request.toolCallId, request.name, request.reason, request.site, request.input, request.alwaysAsk);
+  }
+  ($("composer") as HTMLTextAreaElement).value = snapshot.tabState?.draft ?? "";
+  renderExportBtn();
 }
 
 function startHeartbeat(): void {
@@ -183,7 +259,8 @@ function startHeartbeat(): void {
 function listenForEvents(): void {
   chrome.runtime.onMessage.addListener((msg: PanelEvent, sender, _sendResponse) => {
     if (!isBackground(sender)) return false;
-    void handleEvent(msg);
+    if (booting) bootEvents.push(msg);
+    else void handleEvent(msg);
     return false;
   });
 }
@@ -206,6 +283,7 @@ async function handleEvent(e: PanelEvent): Promise<void> {
       break;
     case "assistant_message": {
       hideTyping();
+      if (renderedMessages.has(e.message.id)) { finishStreaming(); break; }
       // Detect whether reasoning streamed live this turn BEFORE finalizing —
       // if the panel missed the stream (opened mid-run, SW restart), rebuild
       // the thinking block from the committed message so it's never lost.
@@ -463,6 +541,7 @@ function updateStreamingBubble(kind: "text" | "reasoning", content: string): voi
 // ---------------------------------------------------------------------------
 
 async function onSend(): Promise<void> {
+  if (booting) return;
   const input = $("composer") as HTMLTextAreaElement;
   const text = input.value.trim();
   if (!text) return;
@@ -474,18 +553,21 @@ async function onSend(): Promise<void> {
     openProviderPicker();
     return;
   }
+  if (!state.modelId) { setNotice("Choose a model before sending.", true); return; }
   input.value = "";
+  // Persist the empty draft in the input event's order, before subsequent typing.
+  input.dispatchEvent(new Event("input", { bubbles: true }));
   // Reset the textarea height.
   input.style.height = "auto";
   // Clear any leftover suggestion chips -- a new turn is starting.
   $("messages")?.querySelector(".suggestions-row")?.remove();
-  appendMessage({ id: "u", role: "user", parts: [{ type: "text", text }], createdAt: Date.now() });
+  appendMessage({ id: crypto.randomUUID(), role: "user", parts: [{ type: "text", text }], createdAt: Date.now() });
   // Sending is an explicit "I'm at the newest turn now" — always jump down,
   // even if the user had scrolled up (sticky auto-scroll won't).
   scrollMessagesToEnd();
   try {
     const resp = await send<{ sessionId: string | null; queued?: boolean; cleared?: boolean; userMemory?: UserFact[] }>(
-      { kind: "send_message", tabId: state.tabId, text },
+      { kind: "send_message", tabId: state.tabId, text, providerId: state.providerId, modelId: state.modelId },
     );
     // "forget everything" short-circuit: the SW wipes memory without entering
     // the agent loop. Handle it inline instead of pretending it's a run.
@@ -525,6 +607,7 @@ async function onSend(): Promise<void> {
   } catch (e) {
     // Restore the text so the user doesn't lose their input, and surface the error.
     input.value = text;
+    void send({ kind: "set_draft", text }).catch(() => {});
     input.style.height = "auto";
     const messages = $("messages");
     const lastUser = messages?.querySelector(".bubble.user:last-of-type");
@@ -1030,6 +1113,8 @@ async function onConnectFromModal(
 }
 
 function appendMessage(m: Message): void {
+  if (renderedMessages.has(m.id)) return;
+  renderedMessages.add(m.id);
   const wrap = $("messages");
   if (!wrap) return;
   wrap.querySelector(".empty-state")?.remove();
@@ -1260,9 +1345,11 @@ function appendError(message: string): void {
 }
 
 function showPermissionCard(toolCallId: string, name: string, reason: string, site?: string, input: Record<string, unknown> = {}, alwaysAsk = false): void {
+  if ([...document.querySelectorAll<HTMLElement>(".card.permission")].some((card) => card.dataset.toolCallId === toolCallId)) return;
   const sessionId = state.sessionId ?? "";
   const card = document.createElement("div");
   card.className = "card permission";
+  card.dataset.toolCallId = toolCallId;
   const siteLine = site ? `<div class="card-site">${escapeHtml(site)}</div>` : "";
   card.innerHTML = `<div class="card-title">Permission: ${escapeHtml(name)}</div><div class="card-body">${escapeHtml(reason)}</div>${siteLine}`;
 
@@ -1330,7 +1417,8 @@ function shortSite(site: string): string {
 /** The currently-displayed plan card, so plan_step_update can tick steps. */
 let currentPlanCard: HTMLElement | null = null;
 
-function showPlanCard(planId: string, steps: PlanStep[]): void {
+function showPlanCard(planId: string, steps: PlanStep[], needsApproval = true): void {
+  const sessionId = state.sessionId ?? "";
   const wrap = $("messages");
   if (!wrap) return;
   wrap.querySelector(".empty-state")?.remove();
@@ -1369,20 +1457,25 @@ function showPlanCard(planId: string, steps: PlanStep[]): void {
   approve.className = "allow";
   approve.textContent = "Approve plan";
   approve.onclick = () => {
-    void send({ kind: "plan_decision", sessionId: state.sessionId ?? "", planId, decision: "approve" });
+    void send({ kind: "plan_decision", sessionId, planId, decision: "approve" });
     setPlanStatus(card, "progress");
     actions.innerHTML = `<span class="plan-running-badge"><span class="mini-spinner"></span> Running…</span>`;
   };
   const reject = document.createElement("button");
   reject.textContent = "Reject";
   reject.onclick = () => {
-    void send({ kind: "plan_decision", sessionId: state.sessionId ?? "", planId, decision: "reject" });
+    void send({ kind: "plan_decision", sessionId, planId, decision: "reject" });
     card.remove();
     currentPlanCard = null;
   };
   actions.append(approve, reject);
 
   card.append(title, checklist, actions);
+  if (!needsApproval) {
+    const done = steps.every((step) => step.status === "done");
+    actions.textContent = done ? "Completed" : "Running…";
+    setPlanStatus(card, done ? "done" : "progress");
+  }
   wrap.appendChild(card);
   currentPlanCard = card;
   scrollMessages();
@@ -1470,14 +1563,21 @@ function showSuggestions(_messageId: string, actions: SuggestedAction[]): void {
 function renderState(s: string): void {
   state.isBusy = !["idle", "done", "error", "paused"].includes(s);
   // Run over (or paused for input) — nothing is coming, drop the dots.
-  if (!state.isBusy) hideTyping();
+  if (!state.isBusy) {
+    hideTyping();
+    document.querySelectorAll(".card.permission").forEach((card) => card.remove());
+    if (currentPlanCard?.querySelector(".plan-status.proposed")) {
+      currentPlanCard.remove();
+      currentPlanCard = null;
+    }
+  }
   const el = $("session-state");
   if (el) {
     el.textContent = s;
     el.setAttribute("data-state", s);
   }
   const stop = $("stop-btn");
-  if (stop) stop.style.display = s === "running" || s === "streaming" || s === "tool" ? "inline-flex" : "none";
+  if (stop) stop.style.display = state.isBusy ? "inline-flex" : "none";
   // Toggle a busy class on the composer so CSS can show a steering hint.
   const composerWrap = document.querySelector(".composer-wrap");
   if (composerWrap) composerWrap.classList.toggle("busy", state.isBusy);
@@ -1748,7 +1848,7 @@ async function clearAllMemory(): Promise<void> {
 
 
 document.addEventListener("DOMContentLoaded", () => {
-  void boot();
+  void boot().catch((e) => setNotice(`Could not restore this tab: ${(e as Error).message}`, true));
   $("send-btn")?.addEventListener("click", () => void onSend());
   $("stop-btn")?.addEventListener("click", () => onStop());
   // Provider chip -> open picker.
@@ -1771,7 +1871,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const value = (e.target as HTMLSelectElement).value;
     if (!value) return; // placeholder row — nothing to select
     state.modelId = value;
-    void send({ kind: "select_model", modelId: value });
+    if (state.providerId) void send({ kind: "select_model", providerId: state.providerId, modelId: value });
   });
   $("composer")?.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -1785,6 +1885,7 @@ document.addEventListener("DOMContentLoaded", () => {
     composer.addEventListener("input", () => {
       composer.style.height = "auto";
       composer.style.height = Math.min(composer.scrollHeight, 160) + "px";
+      if (!booting) void send({ kind: "set_draft", text: composer.value }).catch(() => {});
     });
   }
   // Autonomy mode toggle. The shield icon in the composer row mirrors the

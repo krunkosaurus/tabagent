@@ -14,6 +14,48 @@ const SETTINGS_KEY = "agent.settings";
 const CREDS_ENCRYPTED_KEY = "agent.creds.encrypted";
 const MASTER_KEY_STORE = "agent.masterkey";
 
+/** Per-tab preferences and composer text never leave memory-only storage. */
+export interface TabState {
+  providerId?: string;
+  modelId?: string;
+  autonomyMode: "ask" | "auto";
+  draft: string;
+}
+
+const tabWrites = new Map<number, Promise<unknown>>();
+
+function withTabLock<T>(tabId: number, action: () => Promise<T>): Promise<T> {
+  const next = (tabWrites.get(tabId) ?? Promise.resolve()).catch(() => {}).then(action);
+  tabWrites.set(tabId, next);
+  void next.finally(() => { if (tabWrites.get(tabId) === next) tabWrites.delete(tabId); }).catch(() => {});
+  return next;
+}
+
+export function loadTabState(tabId: number): Promise<TabState> {
+  return saveTabState(tabId, {});
+}
+
+export function saveTabState(tabId: number, patch: Partial<TabState>): Promise<TabState> {
+  return withTabLock(tabId, async () => {
+    const key = `agent.tab.${tabId}`;
+    const saved = await getJSON<TabState>(sessionArea(), key);
+    const defaults = saved ? undefined : await loadSettings();
+    const state: TabState = { providerId: defaults?.providerId, modelId: defaults?.modelId,
+      autonomyMode: defaults?.autonomyMode ?? "ask", draft: "", ...saved, ...patch };
+    await setJSON(sessionArea(), key, state);
+    return state;
+  });
+}
+
+export function deleteTabState(tabId: number): Promise<void> {
+  return withTabLock(tabId, () => sessionArea().remove(`agent.tab.${tabId}`));
+}
+
+export async function sessionsForTab(tabId: number): Promise<Session[]> {
+  return (await listActiveSessions()).filter((s) => s.tabId === tabId)
+    .sort((a, b) => a.createdAt - b.createdAt);
+}
+
 /** Public, non-secret settings. */
 export interface Settings {
   providerId?: string;

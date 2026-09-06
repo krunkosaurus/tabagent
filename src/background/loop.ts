@@ -504,24 +504,26 @@ async function loop(s: Session, signal: AbortSignal): Promise<void> {
         results.push({ toolCallId: tc.id, name: tc.name, content: parsed.error, isError: true });
         continue;
       }
+      const settings = await loadTabState(s.tabId);
+      const ask = settings.autonomyMode !== "auto";
       const site = await siteOf(s.tabId);
       if (site !== s.approvedOrigin) {
-        s.state = "awaiting_permission";
-        await checkpoint(s);
-        const accessCall: ToolCall = { id: uuid(), name: "access_page", input: { origin: site } };
-        const decision = await permissions.request(s.sessionId, accessCall,
-          "Allow the agent to read and control this new site? Page data will be sent to your provider.", site, true);
-        if (signal.aborted || decision === "deny") return;
-        if (await siteOf(s.tabId) !== site) throw new Error("Page changed during approval. Start again on the intended page.");
+        if (ask) {
+          s.state = "awaiting_permission";
+          await checkpoint(s);
+          const accessCall: ToolCall = { id: uuid(), name: "access_page", input: { origin: site } };
+          const decision = await permissions.request(s.sessionId, accessCall,
+            "Allow the agent to read and control this new site? Page data will be sent to your provider.", site, true);
+          if (signal.aborted || decision === "deny") return;
+          if (await siteOf(s.tabId) !== site) throw new Error("Page changed during approval. Start again on the intended page.");
+        }
         s.approvedOrigin = site;
         await checkpoint(s);
       }
-      // Plan approval never overrides tool permissions. Navigation always asks,
-      // including Auto mode and previously granted origins.
-      const settings = await loadTabState(s.tabId);
+      // Auto authorizes browser actions, including navigation and new sites.
+      // In Ask mode, navigation still requires an explicit per-action decision.
       const alwaysAsk = !!parsed.toolDef.meta.requiresPermission;
-      const needsPerm = alwaysAsk || ((settings.autonomyMode ?? "ask") === "ask" &&
-        toolNeedsPermission(parsed.tool, parsed.toolName));
+      const needsPerm = ask && toolNeedsPermission(parsed.tool, parsed.toolName);
       if (needsPerm) {
         s.state = "awaiting_permission";
         await checkpoint(s);

@@ -721,7 +721,7 @@ function renderAutonomy(): void {
   const shield = $("autonomy-btn");
   if (shield) {
     shield.setAttribute("data-mode", mode);
-    shield.title = mode === "auto" ? "Auto actions (navigation and new sites still ask)" : "Ask before acting";
+    shield.title = mode === "auto" ? "Act without asking, including navigation and new sites" : "Ask before acting";
   }
 }
 

@@ -138,7 +138,7 @@ For Claude models, choose **OpenRouter** and select a Claude model from its live
 
 For a local model, choose **Custom**, use your running server's OpenAI-compatible base URL (for example `http://localhost:11434/v1`), and choose an installed model that supports tool calling. Remote providers require HTTPS; HTTP is allowed only on loopback. Nothing contacts a provider until you explicitly connect or use it.
 
-Review the exact URL/text in each action prompt. Plan approval keeps individual action checks in place. Navigation and entering a new origin require approval even in Auto mode. Site grants apply to the full origin (scheme, hostname and port).
+**Ask before acting** prompts for browser actions; navigation and entering a new origin require explicit approval even with a saved site grant. Plan approval keeps these action checks in place. **Act without asking** runs browser actions automatically, including navigation and reading new sites, within that tab. Site grants apply to the full origin (scheme, hostname and port). Both modes reject unsafe URL schemes.
 
 Conversations and drafts are kept in memory and cleared when their tab closes,
 Chrome exits, or the extension is reloaded or updated. Export a conversation
@@ -235,7 +235,7 @@ Eleven CDP-backed tools, defined in `src/tools/browser-tools.ts`:
 | `press_key` | Press a key or combo (`Escape`, `Tab`, `ctrl+a`, …) |
 | `scroll` | Scroll the page by pixels in any direction |
 | `scroll_to` | Scroll a `ref` element into view |
-| `navigate` | Go to a URL — gated behind user approval |
+| `navigate` | Go to a URL — requires explicit approval in Ask mode |
 | `screenshot` | Full-page JPEG, resized to fit a token budget |
 | `extractText` | Visible text of the page or a `ref` subtree |
 | `set_text` | Overwrite an element's text in place (powers page translation, auto LTR/RTL) |
@@ -286,7 +286,7 @@ CDP is required for capabilities a content script cannot provide:
 - Both storage areas are restricted to trusted extension contexts. API keys are AES-GCM encrypted locally, but the encryption key is in the same Chrome profile: this does not protect against profile theft or a compromised computer.
 - Content scripts cannot call privileged panel commands. Selection actions prepare drafts only. The extension installs with no required host permissions or global content script injection.
 - Page inspection runs in a separate JavaScript world. The page DOM, links and text remain untrusted; prompt injection and destructive model actions cannot be eliminated by these changes.
-- Standalone Ask mode gates page mutations unless you have explicitly granted the origin; navigation and new origins always ask. Local MCP agents use the connection approval setting described above. Requests reject unsafe URL schemes, remote HTTP provider URLs and provider redirects.
+- Standalone Ask mode gates page mutations unless you have explicitly granted the origin; navigation and new origins always ask in this mode. Act without asking permits these browser actions automatically on the tab. Local MCP agents use the connection approval setting described above. Requests reject unsafe URL schemes, remote HTTP provider URLs and provider redirects.
 - The debugger permission remains powerful. Use supervised tasks and keep sensitive account administration, payments and secrets out of the agent's workflow.
 
 See [SECURITY.md](SECURITY.md) for findings, validation and limits.

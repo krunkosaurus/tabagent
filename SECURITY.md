@@ -11,7 +11,7 @@ certification, a comprehensive penetration test, or an evaluation of model quali
 | Background commands accepted messages from content scripts without checking sender context. | Privileged commands require the extension's panel/popup. Content scripts can only submit selection drafts from their own top-level HTTP(S) tab. Offscreen commands and panel events require the background sender. |
 | Page selections could start an agent run; the open shadow root accepted synthetic clicks. | Selection requires trusted clicks, uses a closed shadow root, and only fills a draft for the user to submit. |
 | Model-generated plan text and tool-result previews were inserted as raw HTML. | Escape these fields; create screenshot elements using DOM APIs; limit images/fonts/frames/objects with CSP. |
-| Plan approval and Auto mode bypassed navigation approval; grants used hostname only; prompts omitted actual arguments. | Standalone plan approval no longer skips action checks. Navigation always asks. Grants/decisions bind to origin and session; prompts display arguments. New origins require read-access approval, including in standalone Auto mode. |
+| Plan approval bypassed navigation approval; grants used hostname only; prompts omitted actual arguments. | In Ask mode, plan approval does not skip action checks; navigation and new origins require explicit approval even with a saved site grant. Grants/decisions bind to origin and session; prompts display arguments. Act without asking authorizes browser actions, navigation and reading new origins on the selected tab. |
 | `navigate` accepted arbitrary schemes; custom provider URLs allowed cleartext remote credentials and redirecting POST bodies. | Navigation permits HTTP(S) without embedded credentials. Providers require HTTPS except loopback, reject query/fragment URLs, omit cookies/referrers and reject redirects. |
 | Page JavaScript could tamper with the reference map and helpers in the main world. | DOM tools run in a named isolated world; native page DOM remains untrusted. Stop prevents subsequent tool CDP commands. |
 | Full conversation/page-text checkpoints were mirrored to disk; the model could silently store persistent memories and trigger extra inference. | Memory-only conversation checkpoints. Automatic memory tools/extraction removed; only user-edited notes feed future prompts. Old disk mirrors are removed on startup. |
@@ -109,9 +109,10 @@ The debugger permission is still powerful. Host permission minimization does
 not remove CDP's ability to interact with logged-in sites. The agent can follow
 malicious page instructions, misidentify elements, read sensitive visible text,
 or take harmful actions after approval. DOM can change during an interaction;
-origin checks and isolated worlds do not authenticate page content. Auto mode
-and stored origin grants intentionally permit ordinary actions without a new
-prompt. There is no semantic detector that reliably recognizes every payment,
+origin checks and isolated worlds do not authenticate page content. Act without
+asking intentionally permits browser actions, navigation and reading new origins
+on the selected tab without prompts. Stored origin grants permit ordinary actions
+on their origin in Ask mode. There is no semantic detector that reliably recognizes every payment,
 message submission, deletion or secret.
 
 Use Ask mode, supervise actions, and prefer a separate Chrome profile containing
@@ -138,7 +139,9 @@ your chosen provider.
   snapshot without tab URL access, custom connection editing/key retention,
   rejection of implicit key forwarding to a new address,
   snapshot and typing in an isolated world, escaped plan HTML, action approval
-  after plan approval, Auto navigation, cross-origin read gating, image delivery,
+  after plan approval, automatic navigation and new-origin reads in Auto mode,
+  unsafe URL rejection, Ask-mode navigation and cross-origin read gating (including
+  mode changes during a run), image delivery,
   disk storage checks and panel JavaScript errors.
   Also covers native tab-specific panel creation from a real click, switching and
   reopening panels, separate model/autonomy choices and drafts, concurrent tab

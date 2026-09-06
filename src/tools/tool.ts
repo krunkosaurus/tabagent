@@ -25,7 +25,7 @@ export interface ToolMeta {
   mutatesPage?: boolean;
   /** Read-only (snapshot, extract, screenshot). Can batch in parallel. */
   readonly?: boolean;
-  /** Always require explicit user approval. */
+  /** In Ask mode, require explicit approval even with a saved site grant. */
   requiresPermission?: boolean;
 }
 

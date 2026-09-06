@@ -215,15 +215,25 @@ try {
   assert.equal(await target.locator('#name').inputValue(), 'Verified input');
   console.log('PASS: escaped plan HTML; approved plans still require action approval; typing works');
 
-  await send({ kind: 'set_autonomy', mode: 'auto' });
+  await panel.locator('#mode-auto').click();
+  await until(async () => (await send({ kind: 'get_state' })).data.settings.autonomyMode === 'auto', 'Auto mode saved from the panel');
+  assert.match(await panel.locator('#autonomy-btn').getAttribute('title'), /including navigation and new sites/);
   sessionId = await start([{ name: 'navigate', input: { url: 'javascript:alert(1)' } }]);
-  const navigation = await until(() => events.find((e) => e.kind === 'permission_request' && e.name === 'navigate'), 'navigation in Auto mode');
-  assert.equal(navigation.alwaysAsk, true);
-  await send({ kind: 'permission_decision', sessionId, toolCallId: navigation.toolCallId, decision: 'allow' });
   await finished(sessionId);
+  assert(!events.some((e) => e.kind === 'permission_request'));
   assert(events.some((e) => e.kind === 'tool_result' && e.name === 'navigate' && e.isError));
   assert.equal(target.url(), baseURL + '/');
-  console.log('PASS: Auto mode still prompts for navigation; unsafe schemes fail even after approval');
+  const searchURL = baseURL + '/search/DGX%20Spark';
+  sessionId = await start([
+    { name: 'navigate', input: { url: searchURL } },
+    { name: 'snapshot', input: {} },
+  ]);
+  await finished(sessionId);
+  assert.equal(target.url(), searchURL);
+  assert(!events.some((e) => e.kind === 'permission_request'));
+  assert(events.some((e) => e.kind === 'tool_result' && e.name === 'navigate' && !e.isError));
+  assert(events.some((e) => e.kind === 'tool_result' && e.name === 'snapshot' && !e.isError && e.content.includes('Local fixture')));
+  console.log('PASS: Act without asking navigates and reads the result without prompts; unsafe URL schemes still fail');
 
   sessionId = await start([{ name: 'screenshot', input: {} }]);
   await finished(sessionId);
@@ -240,24 +250,60 @@ try {
   await finished(sessionId);
   assert(events.some((e) => e.kind === 'tool_result' && e.name === 'snapshot' && !e.isError));
   console.log('PASS: page works when Chrome omits Tab.url; no extra host permissions');
-  // A page redirect while the model is thinking must not silently grant access
-  // to a new origin, even for a read-only tool and even in Auto mode.
+  // Auto authorizes navigation and reading on new origins within the same tab.
   const secondSite = createServer((_, res) => res.end('<h1>Private second site</h1>'));
   await new Promise((r) => secondSite.listen(0, '127.0.0.1', r));
   try {
     const secondURL = `http://localhost:${secondSite.address().port}/`;
+    sessionId = await start([
+      { name: 'navigate', input: { url: secondURL } },
+      { name: 'snapshot', input: {} },
+    ]);
+    await finished(sessionId);
+    assert.equal(target.url(), secondURL);
+    assert(!events.some((e) => e.kind === 'permission_request'));
+    assert(events.some((e) => e.kind === 'tool_result' && e.name === 'snapshot' && !e.isError && e.content.includes('Private second site')));
+
+    // Site changes while the model is thinking follow the selected mode too.
+    await target.goto(baseURL);
     beforeNextReply = () => target.goto(secondURL);
+    sessionId = await start([{ name: 'snapshot', input: {} }]);
+    await finished(sessionId);
+    assert(!events.some((e) => e.kind === 'permission_request'));
+    assert(events.some((e) => e.kind === 'tool_result' && e.name === 'snapshot' && !e.isError && e.content.includes('Private second site')));
+    console.log('PASS: Auto mode navigates across origins and reads redirected pages without access prompts');
+
+    // Re-read the mode before each action, including changes made mid-stream.
+    await target.goto(baseURL);
+    beforeNextReply = async () => {
+      await panel.locator('#mode-ask').click();
+      await until(async () => (await send({ kind: 'get_state' })).data.settings.autonomyMode === 'ask', 'Ask mode saved during stream');
+      await target.goto(secondURL);
+    };
     sessionId = await start([{ name: 'snapshot', input: {} }]);
     const access = await until(() => events.find((e) => e.kind === 'permission_request' && e.name === 'access_page'), 'new-origin read approval');
     assert.equal(access.site, new URL(secondURL).origin);
+    assert.equal(access.alwaysAsk, true);
     assert(!events.some((e) => e.kind === 'tool_result' && e.name === 'snapshot'));
     await send({ kind: 'permission_decision', sessionId, toolCallId: access.toolCallId, decision: 'deny' });
     await finished(sessionId);
-    console.log('PASS: cross-origin redirects cannot silently grant read access in Auto mode');
+    console.log('PASS: switching to Ask during a run requires approval before reading a new origin');
   } finally {
     secondSite.closeAllConnections();
     await new Promise((r) => secondSite.close(r));
   }
+  await target.goto(baseURL);
+  sessionId = await start([{ name: 'navigate', input: { url: baseURL + '/approved-navigation' } }]);
+  const navigation = await until(() => events.find((e) => e.kind === 'permission_request' && e.name === 'navigate'), 'navigation in Ask mode');
+  assert.equal(navigation.alwaysAsk, true);
+  assert.equal(target.url(), baseURL + '/');
+  assert(!events.some((e) => e.kind === 'tool_started' && e.name === 'navigate'));
+  await send({ kind: 'permission_decision', sessionId, toolCallId: navigation.toolCallId, decision: 'allow' });
+  await finished(sessionId);
+  assert.equal(target.url(), baseURL + '/approved-navigation');
+  await panel.locator('#mode-auto').click();
+  await until(async () => (await send({ kind: 'get_state' })).data.settings.autonomyMode === 'auto', 'restore Auto for tab isolation checks');
+  console.log('PASS: Ask mode holds navigation until explicitly approved');
   // Each panel is owned by one tab, including when booting with a different
   // tab active. Use actual sidePanel configuration as well as separate UI pages.
   await target.goto(baseURL);

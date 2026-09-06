@@ -186,19 +186,27 @@ export function initExternal(send: (request: PanelRequest) => Promise<unknown>):
     el("external-status").textContent = (e as Error).message;
     el("external-operation-error").textContent = (e as Error).message;
   };
-  el("external-connect").addEventListener("click", () => {
-    const input = el<HTMLInputElement>("external-code");
+  const input = el<HTMLInputElement>("external-code");
+  const button = el<HTMLButtonElement>("external-connect");
+  const updatePairingReady = () => {
+    let ready = false;
+    try { parsePairingCode(input.value); ready = true; } catch { /* Incomplete codes stay neutral. */ }
+    button.classList.toggle("is-ready", ready);
+  };
+  input.addEventListener("input", updatePairingReady);
+  input.addEventListener("change", updatePairingReady);
+  updatePairingReady();
+  button.addEventListener("click", () => {
     const code = input.value.trim();
     const approvalMode = el<HTMLSelectElement>("external-approval-mode").value as ExternalApprovalMode;
     try { parsePairingCode(code); } catch (e) { error(e); return; }
-    const button = el<HTMLButtonElement>("external-connect");
     button.disabled = true;
     // Chrome requires this call inside the click's user gesture.
     void chrome.permissions.request({ origins: ["http://127.0.0.1/*"] }).then(async (allowed) => {
       if (!allowed) throw new Error("Local connection permission was denied.");
       await send({ kind: "external_connect", code, approvalMode });
       input.value = ""; // pairing secret is never stored
-    }).catch(error).finally(() => { button.disabled = false; });
+    }).catch(error).finally(() => { button.disabled = false; updatePairingReady(); });
   });
   el("external-stop").addEventListener("click", () => void send({ kind: "external_stop" }).catch(error));
   for (const [id, allow] of [["external-allow", true], ["external-deny", false]] as const) {

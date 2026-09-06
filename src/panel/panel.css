@@ -2207,6 +2207,9 @@ footer:has(.composer-wrap.busy) .composer-hint::after {
 .external-panel p { margin: 8px 0; line-height: 1.45; overflow-wrap: anywhere; }
 .external-panel input, .external-panel select { box-sizing: border-box; width: 100%; padding: 8px; margin-top: 5px; background: var(--bg); color: inherit; border: 1px solid var(--border, #555); border-radius: 5px; }
 .external-panel button { padding: 6px 10px; margin: 4px 4px 0 0; cursor: pointer; }
+#external-connect { background: var(--bg-elev); color: var(--fg-secondary); border: 1px solid var(--border); border-radius: 5px; font-weight: 600; }
+#external-connect.is-ready:not(:disabled) { background: var(--accent); color: #1c1a17; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+#external-connect:disabled { cursor: wait; opacity: 0.65; }
 .external-panel [hidden] { display: none !important; }
 .external-error { color: var(--error, #d97676); }
 

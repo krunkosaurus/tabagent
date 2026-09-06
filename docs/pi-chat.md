@@ -68,6 +68,11 @@ Click that line to expand the current thinking; it remains available as
 view scrolls independently, so you can read earlier text while new text arrives.
 Models that do not expose thinking continue to show the normal working status.
 
+Assistant replies render Markdown as they stream and when restored: bold,
+italics, headings, lists, quotes, code blocks and tables. Your messages and the
+thinking view remain literal text. Wide code blocks and tables scroll within
+the panel.
+
 You can continue typing in Pi as well. While Pi is busy, the browser lets you
 draft the next message; sending becomes available when Pi is idle. The panel
 does not enqueue or steer work. Prompts are text, up to 8,000 characters; slash
@@ -107,8 +112,11 @@ notice appears if it is shortened. Thinking is collapsed by default, including
 after panel reload. Raw tool output, images, system prompts, session file paths,
 redacted thinking blocks and provider signatures are excluded. Pairing codes,
 including partially streamed tokens, are hidden. Assistant text and thinking
-can still quote page/tool content. Both render literally, without loading remote
-images or interpreting HTML.
+can still quote page/tool content. Assistant Markdown is parsed with Marked and
+sanitized with DOMPurify using a restricted set of formatting tags and attributes.
+Raw HTML stays literal, image references display only their descriptions, and
+links permit only HTTP(S) or mailto with `noopener noreferrer`. Thinking remains
+plain text. Rendering never loads model-supplied images or runs scripts.
 
 The native adapter uses `pi.sendUserMessage`, Pi's message events and `ctx.abort`.
 It runs in the existing Pi process and shares `mcp/bridge.mjs` with the stdio MCP

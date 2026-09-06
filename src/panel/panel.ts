@@ -486,7 +486,7 @@ function ensureStreamingBubble(kind: "text" | "reasoning"): void {
   if (kind === "text") {
     const div = document.createElement("div");
     div.id = id;
-    div.className = "bubble assistant streaming";
+    div.className = "bubble assistant streaming markdown-body";
     $("messages")?.appendChild(div);
   } else {
     // Reasoning streams into a collapsible "Thinking" block. It naturally
@@ -1133,6 +1133,7 @@ function appendMessage(m: Message): void {
   // Assistant output is rendered Markdown (headings, bold, lists, code).
   // User echoes stay plain text -- a user typing ** shouldn't become bold.
   if (m.role === "assistant") {
+    div.classList.add("markdown-body");
     div.innerHTML = renderMarkdown(text);
   } else {
     div.textContent = text;

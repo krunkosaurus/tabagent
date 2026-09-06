@@ -8,7 +8,7 @@
     "build": "node build.mjs",
     "clean": "rm -rf dist build",
     "test": "node tests/security.mjs && node tests/pairing.mjs && node tests/mcp.mjs && node tests/pi.mjs",
-    "test:browser": "npm run build && node tests/browser.mjs && node tests/mcp-browser.mjs && node tests/pi-browser.mjs",
+    "test:browser": "npm run build && node tests/markdown.mjs && node tests/browser.mjs && node tests/mcp-browser.mjs && node tests/pi-browser.mjs",
     "mcp": "node mcp/server.mjs"
   },
   "license": "MIT",
@@ -25,6 +25,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
+    "dompurify": "3.4.15",
+    "marked": "18.0.11",
     "ws": "8.21.3"
   },
   "engines": {

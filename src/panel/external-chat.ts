@@ -1,12 +1,15 @@
 import type { ExternalState } from "../shared/external-tools";
 import type { ChatRequest, ChatThinking } from "../shared/external-chat";
 import type { PanelRequest } from "../shared/protocol";
+import { renderMarkdown } from "./markdown";
 
 const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 let state: ExternalState | null = null;
 let view: "chat" | "activity" = "activity";
 let pending = false;
 let send: (request: PanelRequest) => Promise<unknown>;
+// Compare source text, since formatted content.textContent differs from Markdown.
+const renderedText = new WeakMap<Element, string>();
 
 function renderThinking(thinking: ChatThinking | undefined, reset: boolean): void {
   const details = el<HTMLDetailsElement>("external-chat-thinking");
@@ -18,7 +21,7 @@ function renderThinking(thinking: ChatThinking | undefined, reset: boolean): voi
   const preview = el("external-chat-thinking-preview");
   preview.textContent = thinking?.text.replace(/\s+/g, " ").trim().slice(-400) ?? "";
   preview.scrollLeft = preview.scrollWidth;
-  // Model thinking is plain text, just like chat. It never becomes markup.
+  // The compact thinking view remains plain text.
   if (body.textContent !== (thinking?.text ?? "")) body.textContent = thinking?.text ?? "";
   el("external-chat-thinking-truncated").hidden = !thinking?.truncated;
   if (details.open && follow && !reset) body.scrollTop = body.scrollHeight;
@@ -76,12 +79,16 @@ export function renderChat(next: ExternalState | null, follow?: boolean): void {
       const label = document.createElement("strong");
       label.textContent = message.role === "user" ? "You" : "Pi";
       const content = document.createElement("div");
+      if (message.role === "assistant") content.className = "markdown-body";
       row.append(label, content);
       history.append(row);
     }
-    // Plain text never loads model-supplied URLs, images, HTML or scripts.
     const content = row.lastElementChild!;
-    if (content.textContent !== message.text) content.textContent = message.text;
+    if (renderedText.get(content) !== message.text) {
+      if (message.role === "assistant") content.innerHTML = renderMarkdown(message.text);
+      else content.textContent = message.text;
+      renderedText.set(content, message.text);
+    }
   }
   renderThinking(thinking, thinkingChanged);
   if (followMessages) scroll.scrollTop = scroll.scrollHeight;

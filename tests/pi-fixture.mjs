@@ -72,7 +72,7 @@ export async function createPiFixture() {
   };
   const manager = SessionManager.inMemory(scratch);
   manager.appendMessage({ role: 'user', content: 'Remember the blue lighthouse.', timestamp: Date.now() });
-  manager.appendMessage(assistant('I will remember the blue lighthouse.'));
+  manager.appendMessage(assistant('I will remember the **blue lighthouse**.'));
   const runtime = await createAgentSessionRuntime(factory, { cwd: scratch, agentDir: scratch, sessionManager: manager });
   const bind = async (session) => {
     session.subscribe((event) => events.push(event));

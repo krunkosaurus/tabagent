@@ -32,10 +32,10 @@ Follow the [installation instructions](#installation) below to build it and load
 ![Chrome 120+](https://img.shields.io/badge/Chrome-120%2B-4285F4?logo=googlechrome&logoColor=white)
 ![Manifest V3](https://img.shields.io/badge/Manifest-V3-34A853)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)
-![Zero extension runtime dependencies](https://img.shields.io/badge/extension%20runtime%20deps-0-brightgreen)
+![Sanitized Markdown](https://img.shields.io/badge/Markdown-sanitized-brightgreen)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow)
 
-TabAgent is a Manifest V3 Chrome extension that lets any OpenAI-compatible LLM drive the active tab through the Chrome DevTools Protocol. Connect a provider — **Z.AI's coding plan is the first-class default** — give the agent a goal in the side panel, and it works the page through 11 structured browser tools. Everything is hand-rolled with zero runtime dependencies: SSE streaming, markdown rendering, and WebCrypto encryption included.
+TabAgent is a Manifest V3 Chrome extension that lets any OpenAI-compatible LLM drive the active tab through the Chrome DevTools Protocol. Connect a provider — **Z.AI's coding plan is the first-class default** — give the agent a goal in the side panel, and it works the page through 11 structured browser tools. The vanilla TypeScript UI includes SSE streaming, sanitized Markdown rendering, and WebCrypto encryption.
 
 The extension can also give **local Codex, Hermes, Pi and other MCP clients** browser
 tools through a local companion process. The companion uses the official MCP SDK
@@ -94,6 +94,7 @@ https://github.com/user-attachments/assets/2adfd956-d6e8-4b5c-893d-dc04f92abe66
 - **Unattended-run hygiene** — JS dialogs (`alert`/`confirm`/`prompt`) are auto-dismissed; `beforeunload` blocks are detected and reported instead of hanging
 - **Notifications** — chime + system toast when a run finishes or needs your attention (toggleable)
 - **Polished chat UI** — streaming markdown, collapsible reasoning blocks, screenshot lightbox, suggested next-action chips, light/dark theme, JSON conversation export
+- **Sanitized assistant Markdown** — standalone and Pi replies display bold, headings, nested lists, quotes, code and tables while streaming and after reopening. Raw HTML stays literal, image references display their descriptions, and links permit only HTTP(S) or mailto.
 
 ## Installation
 
@@ -263,7 +264,7 @@ The loop (`src/background/loop.ts`) checkpoints progress during a run. Recovery 
 
 The debugger attaches when a run starts and detaches when it finishes. While attached, it also keeps the service worker alive for the duration of the run (Chrome 118+ behavior).
 
-The Chrome extension has no runtime dependencies: SSE parsing, markdown rendering, and crypto are implemented in-repo, and the UI is vanilla TypeScript. The optional local MCP companion uses the official MCP SDK and `ws`.
+The Chrome extension bundles [Marked](https://marked.js.org/) and [DOMPurify](https://github.com/cure53/DOMPurify) locally for Markdown parsing and HTML sanitization; it loads no renderer code from a CDN. SSE parsing and crypto are implemented in-repo, and the UI is vanilla TypeScript. The optional local MCP companion uses the official MCP SDK and `ws`.
 
 See [the tab-instance architecture](docs/architecture.md) for panel ownership,
 state restoration, concurrent runs and tab cleanup.

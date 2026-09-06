@@ -28,7 +28,6 @@ try {
     export * from './src/core/storage';
     export * from './src/background/permissions';
     export * from './src/background/plan-service';
-    export * from './src/panel/markdown';
     export * from './src/providers/openai-compat';
     export * from './src/shared/external-tools';
     export * from './src/tools/browser-tools';
@@ -132,16 +131,13 @@ try {
   assert.equal(request.init.credentials, 'omit');
   assert.equal(request.init.referrerPolicy, 'no-referrer');
   globalThis.fetch = originalFetch;
-  const html = m.renderMarkdown('<img src="https://track.example"> [x](javascript:alert) **ok**');
-  assert(!html.includes('<img'));
-  assert(!html.includes('href="javascript:'));
   const manifest = JSON.parse(await readFile('dist/manifest.json', 'utf8'));
   assert.deepEqual(manifest.host_permissions, []);
   assert(!manifest.side_panel, 'no global panel may follow the active tab');
   assert(!manifest.content_scripts);
   assert(!manifest.web_accessible_resources);
   assert(!manifest.content_security_policy.extension_pages.includes('unsafe-eval'));
-  console.log('PASS: image/tool wire format, private fetch options, markdown, minimal manifest');
+  console.log('PASS: image/tool wire format, private fetch options, minimal manifest');
 } finally {
   await rm(dir, { recursive: true, force: true });
 }

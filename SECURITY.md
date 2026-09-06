@@ -41,12 +41,22 @@ prompts into it. No host chat is exposed through generic MCP tools. Session
 replacement, branch changes and reload revoke the old pairing. Requests are
 bounded, deduplicated and never automatically replayed after uncertain delivery.
 
-The transcript contains bounded recent visible text only, rendered literally;
-raw reasoning, tool output, images and system prompts are excluded. User or
-assistant text can itself contain private information. Pi may persist the
+The transcript contains bounded recent visible text only. Assistant replies use
+the same sanitized Markdown renderer as standalone chat; user messages remain
+literal text. Raw tool output, images and system prompts are excluded. The
+latest model thinking is shared separately with the attached tab as bounded,
+collapsed plain text. User or assistant text can itself contain private
+information. Pi may persist the
 conversation; Chrome does not save this transcript or its drafts. Stop sharing
 revokes browser/chat access but does not cancel unrelated Pi work already
 submitted. [Setup, controls, limits and tests](docs/pi-chat.md).
+
+Assistant Markdown is parsed by locally bundled Marked and then sanitized by
+DOMPurify on every render, including partial streams and restored history. The
+allowlist permits document formatting, tables and HTTP(S)/mailto links. Raw HTML
+is escaped; image tokens become descriptions. Scripts, event handlers, styles,
+forms, embedded media, IDs and data attributes are excluded. Links open with
+`noopener noreferrer`; rendering initiates no model-supplied resource requests.
 
 ### External MCP agents (v0.2.2)
 
@@ -118,9 +128,12 @@ your chosen provider.
 - `npm test`: storage access policy, credential encryption round trip, checkpoint
   privacy, unsafe URLs, sender checks, session/origin-bound permissions, mandatory
   navigation approval, provider fetch privacy options, tool/image wire formats,
-  markdown and manifest restrictions.
+  manifest restrictions.
 - `npm run test:browser`: isolated Chrome for Testing profile and real extension
-  APIs against a loopback mock provider. Covers boot, model discovery/selection,
+  APIs against a loopback mock provider. Also tests Markdown in a browser without
+  extension CSP: nested formatting, incomplete fences, tables, malicious URLs,
+  raw HTML, scripts and image payloads at every streaming boundary, no remote
+  resource requests, and Pi/standalone rendering. Covers boot, model discovery/selection,
   content-script rejection/storage isolation, selection draft behavior, DOM
   snapshot without tab URL access, custom connection editing/key retention,
   rejection of implicit key forwarding to a new address,

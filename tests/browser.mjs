@@ -44,7 +44,7 @@ const server = createServer(async (req, res) => {
     }
     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
     const call = toolsToReturn.shift();
-    const delta = call ? { tool_calls: [{ index: 0, id: `call-${requests.length}`, type: 'function', function: { name: call.name, arguments: JSON.stringify(call.input) } }] } : { content: 'Mock provider completed the task.' };
+    const delta = call ? { tool_calls: [{ index: 0, id: `call-${requests.length}`, type: 'function', function: { name: call.name, arguments: JSON.stringify(call.input) } }] } : { content: 'Mock provider **completed** the task. <img src=x onerror=alert(1)> [unsafe](javascript:alert(1))' };
     res.end(`data: ${JSON.stringify({ choices: [{ delta, finish_reason: call ? 'tool_calls' : 'stop' }] })}\n\ndata: [DONE]\n\n`);
   } else {
     res.setHeader('Content-Type', 'text/html');
@@ -187,6 +187,9 @@ try {
 
   let sessionId = await start([{ name: 'snapshot', input: {} }]);
   await finished(sessionId);
+  await until(() => panel.locator('.bubble.assistant.markdown-body strong').count(), 'formatted standalone reply');
+  assert.equal(await panel.locator('.bubble.assistant.markdown-body strong').last().textContent(), 'completed');
+  assert.equal(await panel.locator('.bubble.assistant img, .bubble.assistant a[href]').count(), 0);
   assert(requests.every((r) => r.model === 'mock-selected'));
   assert(requests.every((r) => !r.tools.some((t) => ['remember', 'forget'].includes(t.function.name))));
   const snap = events.find((e) => e.kind === 'tool_result' && e.name === 'snapshot');

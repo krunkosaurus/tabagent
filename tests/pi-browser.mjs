@@ -65,6 +65,7 @@ try {
   assert.equal(await a.panel.locator('#external-chat-pane').isVisible(), false);
   await a.panel.locator('#external-chat-attach').click();
   await until(() => a.panel.locator('#external-chat-messages').textContent().then((t) => t.includes('blue lighthouse')), 'existing conversation');
+  assert.equal(await a.panel.locator('.external-chat-message.assistant .markdown-body strong').textContent(), 'blue lighthouse');
   await b.panel.evaluate(() => {
     window.chatBroadcasts = [];
     chrome.runtime.onMessage.addListener((m) => window.chatBroadcasts.push(m));
@@ -85,19 +86,34 @@ try {
   assert.equal(pi.requests.length, 0);
   console.log('PASS: explicit in-tab attachment restores Pi history; other tabs and content scripts cannot read or send chat');
 
-  pi.plans.push({ text: 'Partial <img src=x onerror=alert(1)>', tail: ' completed', hold: true });
-  await a.panel.locator('#external-chat-input').fill('Continue with the lighthouse');
+  pi.plans.push({ text: 'Partial <img src=x onerror=alert(1)> **bold**\n\n**stre',
+    tail: 'amed** completed\n\n## Summary\n\n- First **item**\n- Second item\n\n```html\n<strong>literal code</strong>\n```\n\n| Name | Value |\n| --- | ---: |\n| lighthouse | 42 |\n\n[Details](https://example.com/) [unsafe](javascript:alert(1)) ![image description](https://tracking.invalid/pi)', hold: true });
+  await a.panel.locator('#external-chat-input').fill('Continue with the lighthouse **literally**');
   await a.panel.locator('#external-chat-input').press('Enter');
   await until(() => a.panel.locator('#external-chat-messages').textContent().then((t) => t.includes('Partial <img')), 'streamed text');
   assert.equal(await a.panel.locator('#external-chat-messages img').count(), 0);
+  const reply = a.panel.locator('.external-chat-message.assistant .markdown-body').last();
+  assert.equal(await reply.locator('strong').textContent(), 'bold');
+  assert.match(await a.panel.locator('.external-chat-message.user > div').last().textContent(), /\*\*literally\*\*/);
+  assert.equal(await a.panel.locator('.external-chat-message.user > div strong').count(), 0);
   assert.equal(await a.panel.locator('#external-chat-send').isDisabled(), true);
   await a.panel.locator('#external-chat-input').fill('Draft while working');
   await a.panel.reload();
   await until(() => a.panel.locator('#external-chat-messages').textContent().then((t) => t.includes('Partial <img')), 'restore during stream');
+  assert.equal(await reply.locator('strong').textContent(), 'bold');
   assert.equal(pi.requests.length, 1, 'reload never replays a prompt');
   pi.release();
   await until(() => a.panel.locator('#external-chat-send').isEnabled(), 'Pi idle');
   assert.match(await a.panel.locator('#external-chat-messages').textContent(), /completed/);
+  assert.deepEqual(await reply.locator('strong').allTextContents(), ['bold', 'streamed', 'item']);
+  assert.equal(await reply.locator('h2').textContent(), 'Summary');
+  assert.equal(await reply.locator('li').count(), 2);
+  assert.equal(await reply.locator('pre code').textContent(), '<strong>literal code</strong>\n');
+  assert.equal(await reply.locator('table td').last().textContent(), '42');
+  assert.equal(await reply.locator('a[href]').count(), 1);
+  assert.equal(await reply.locator('a[href]').getAttribute('rel'), 'noopener noreferrer');
+  assert.equal(await reply.locator('img, script, style, iframe').count(), 0);
+  assert.equal(await reply.evaluate((node) => getComputedStyle(node).whiteSpace), 'normal');
   assert.equal(await a.panel.locator('#external-chat-input').inputValue(), '', 'chat drafts are memory-only');
   assert(!JSON.stringify(await b.panel.evaluate(() => window.chatBroadcasts)).includes('lighthouse'));
   assert(!JSON.stringify(await a.panel.evaluate(() => chrome.storage.local.get(null))).includes('Continue with the lighthouse'));
@@ -107,7 +123,7 @@ try {
     assert(bounds && bounds.x >= 0 && bounds.x + bounds.width <= 360 && bounds.y + bounds.height <= 800, id);
   }
   await a.panel.screenshot({ path: join(tmpdir(), 'tabagent-pi-chat-review.png') });
-  console.log('PASS: streamed replies render safely at 360px; reload restores chat without replay or Chrome persistence');
+  console.log('PASS: Pi Markdown formats history, partial streams and completed replies at 360px; user text stays literal and reload never replays prompts');
 
   const thoughtStart = 'I will check the page before deciding what to do.\n';
   const thoughtTail = `Thinking about the next browser action. `.repeat(20) + '\nLATEST_THOUGHT';

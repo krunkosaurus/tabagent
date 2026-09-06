@@ -2,7 +2,28 @@
 
 > A supervised AI agent with an independent instance for each browser tab.
 
-Build from source using the instructions below to include the latest security and reliability fixes. See [the security review](SECURITY.md) for data flows, validation and remaining limitations.
+**This is my fork of [binSaed/tabagent](https://github.com/binSaed/tabagent), with security improvements and features added through hands-on testing.**
+
+I've been looking for the best open-source replacement for Claude's Chrome extension: something that can work with any OpenAI-compatible LLM that supports tool calling, including models running on my own hardware. So far, TabAgent is my pick.
+
+It impressed me more than several GitHub projects with far more stars. When I found it, the original project had **zero stars**, yet it was already a capable browser agent built as an alternative to Claude's browser extension.
+
+I forked it to strengthen its security and fill in gaps I found while using it:
+
+- **Security and privacy improvements** — tighter permissions, safer provider connections, and stronger isolation between web pages and extension controls. See the [security review](SECURITY.md) for the changes and remaining limitations.
+- **An independent instance in each tab** — conversations, drafts, model choices, and approvals stay with their tab when you switch between pages.
+- **Editable custom model connections** — update a saved endpoint or API key, and choose among the models your server provides.
+
+I'm using it successfully with **DeepSeek V4 Flash Vision running locally on my dual Sparks**. That's the setup I'm building this fork around: a useful browser agent powered by models I run myself.
+
+Clone my fork, try it with your own models, and let's move away from Anthropic toward **100% local AI**, one step at a time:
+
+```sh
+git clone https://github.com/krunkosaurus/tabagent.git
+cd tabagent
+```
+
+Follow the [installation instructions](#installation) below to build it and load it into Chrome.
 
 <p align="center">
   <img src=".github/assets/banner.png" alt="TabAgent — turn any browser tab into an AI agent" width="100%" />

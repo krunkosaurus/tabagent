@@ -1,5 +1,7 @@
 import { isBackground, providerURL } from "../core/security";
 import { panelTabId } from "../shared/panel-target";
+import { initExternal, renderExternal, externalConnected } from "./external";
+import type { ExternalState } from "../shared/external-tools";
 /**
  * Side panel UI (vanilla TS).
  *
@@ -146,7 +148,7 @@ async function boot(): Promise<void> {
       : "sessionId" in event ? event.sessionId : undefined;
     if (!sessionId || i > (cutoff.get(sessionId) ?? -1)) await handleEvent(event);
   }
-  ($("send-btn") as HTMLButtonElement).disabled = false;
+  ($("send-btn") as HTMLButtonElement).disabled = externalConnected();
   maybeShowEmptyState();
   // Enable selections on this explicitly activated tab and retrieve drafts.
   void chrome.scripting.executeScript({ target: { tabId: state.tabId }, files: ["selection.js"] }).catch(() => {});
@@ -194,6 +196,7 @@ async function refreshModels(providerId: string): Promise<void> {
 }
 
 interface SettingsResponse {
+  external?: ExternalState | null;
   sessions?: Session[];
   tabState?: TabState;
   pendingPermissions?: Extract<PanelEvent, { kind: "permission_request" }>[];
@@ -246,6 +249,7 @@ function restoreTab(snapshot: SettingsResponse): void {
   }
   ($("composer") as HTMLTextAreaElement).value = snapshot.tabState?.draft ?? "";
   renderExportBtn();
+  renderExternal(snapshot.external ?? null);
 }
 
 function startHeartbeat(): void {
@@ -266,6 +270,10 @@ function listenForEvents(): void {
 }
 
 async function handleEvent(e: PanelEvent): Promise<void> {
+  if (e.kind === "external_state") {
+    if (e.tabId === state.tabId) renderExternal(e.external);
+    return;
+  }
   if ("sessionId" in e && e.sessionId && e.sessionId !== state.sessionId) return;
 
   switch (e.kind) {
@@ -541,7 +549,7 @@ function updateStreamingBubble(kind: "text" | "reasoning", content: string): voi
 // ---------------------------------------------------------------------------
 
 async function onSend(): Promise<void> {
-  if (booting) return;
+  if (booting || externalConnected()) return;
   const input = $("composer") as HTMLTextAreaElement;
   const text = input.value.trim();
   if (!text) return;
@@ -617,6 +625,7 @@ async function onSend(): Promise<void> {
 }
 
 function onStop(): void {
+  if (externalConnected()) { void send({ kind: "external_stop" }); return; }
   if (state.sessionId) void send({ kind: "stop", sessionId: state.sessionId });
 }
 
@@ -1848,6 +1857,7 @@ async function clearAllMemory(): Promise<void> {
 
 
 document.addEventListener("DOMContentLoaded", () => {
+  initExternal(send);
   void boot().catch((e) => setNotice(`Could not restore this tab: ${(e as Error).message}`, true));
   $("send-btn")?.addEventListener("click", () => void onSend());
   $("stop-btn")?.addEventListener("click", () => onStop());

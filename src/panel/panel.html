@@ -41,6 +41,24 @@
       <button id="edit-connection" type="button">Edit connection</button>
       <span id="build-version" aria-label="Extension version"></span>
     </div>
+    <details id="external-panel" class="external-panel">
+      <summary id="external-summary">Local agent</summary>
+      <p id="external-status" role="status">Ask Codex or Hermes to connect to TabAgent, then paste its pairing code here.</p>
+      <div id="external-form">
+        <label for="external-code">Pairing code</label>
+        <input id="external-code" type="password" autocomplete="off" spellcheck="false" placeholder="tabagent:…" />
+        <p>Share this tab's page content with that agent and its configured model. Each action and new site asks for approval here.</p>
+        <button id="external-connect" type="button">Share this tab</button>
+      </div>
+      <button id="external-stop" type="button" hidden>Stop sharing</button>
+      <div id="external-approval" hidden>
+        <p id="external-reason"></p>
+        <pre id="external-action"></pre>
+        <button id="external-allow" type="button">Allow action</button>
+        <button id="external-deny" type="button">Deny action</button>
+      </div>
+      <ol id="external-actions" aria-label="Local agent activity"></ol>
+    </details>
     <div id="notice" class="notice"></div>
 
     <!-- Provider picker overlay -->

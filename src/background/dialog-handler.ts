@@ -11,9 +11,9 @@
  *   - For beforeunload: record the event so the navigate tool can report
  *     "navigation was blocked by an unload handler" instead of hanging.
  *
- * alert/confirm/prompt are auto-dismissed with accept=true (confirm defaults to
- * OK, prompt gets "" -- the least surprising choice for a script that's
- * mid-flow). beforeunload dialogs are NOT auto-dismissed; we record and surface.
+ * alert/confirm/prompt are dismissed with accept=false. A site's confirmation
+ * must not silently approve an extra action. beforeunload dialogs are NOT
+ * auto-dismissed; we record and surface them.
  */
 
 type DialogListener = (info: DialogInfo) => void;
@@ -67,7 +67,7 @@ class DialogHandler {
       void chrome.debugger.sendCommand(
         { tabId },
         "Page.handleJavaScriptDialog",
-        { accept: true },
+        { accept: false },
         () => {
           /* lastError already surfaces as a thrown tool error if relevant */
         },

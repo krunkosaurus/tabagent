@@ -1,5 +1,6 @@
 import { isExtensionPage, isSelectionSender, providerURL } from "../core/security";
 import { openTabPanel, panelTabId } from "../shared/panel-target";
+import { externalAgent } from "./external-agent";
 /**
  * Service worker entry.
  *
@@ -236,6 +237,7 @@ async function heartbeat(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 const PANEL_REQUEST_KINDS = new Set([
+  "external_connect", "external_stop", "external_decision",
   "list_providers", "list_models", "seed_models", "validate_token", "connect_provider", "get_provider_connection",
   "select_model", "set_draft", "set_autonomy", "set_notifications", "set_theme", "get_memory",
   "set_memory", "delete_memory", "export_session", "send_message", "stop", "pause",
@@ -247,7 +249,7 @@ const PANEL_REQUEST_KINDS = new Set([
 const tabRequests = new Map<number, Promise<unknown>>();
 function routePanelRequest(req: PanelRequest, sender: chrome.runtime.MessageSender): Promise<unknown> {
   const tabId = panelTabId(sender.url);
-  if (tabId === undefined || !["send_message", "new_session"].includes(req.kind)) {
+  if (tabId === undefined || !["send_message", "new_session", "external_connect", "external_stop", "resume_interrupted"].includes(req.kind)) {
     return handlePanelRequest(req, sender);
   }
   const request = (tabRequests.get(tabId) ?? Promise.resolve()).catch(() => {})
@@ -306,6 +308,20 @@ async function handlePanelRequest(req: PanelRequest, sender: chrome.runtime.Mess
     }
   }
   switch (req.kind) {
+    case "external_connect":
+      if (typeof req.code !== "string" || req.code.length > 100) throw new Error("Invalid pairing code");
+      if ((await sessionsForTab(tabId!)).some(isBusy)) throw new Error("Stop this tab's current run before sharing it.");
+      await externalAgent.connect(tabId!, req.code);
+      return { ok: true };
+
+    case "external_stop":
+      await externalAgent.disconnect(tabId!);
+      return { ok: true };
+
+    case "external_decision":
+      externalAgent.decide(tabId!, req.id, req.allow);
+      return { ok: true };
+
     case "list_providers":
       return { providers: BUILTIN_PROVIDERS };
 
@@ -446,6 +462,7 @@ async function handlePanelRequest(req: PanelRequest, sender: chrome.runtime.Mess
     }
 
     case "send_message": {
+      if (externalAgent.owns(req.tabId)) throw new Error("Stop sharing this tab before starting TabAgent's own agent.");
       const settings = await loadTabState(req.tabId);
       const providerId = req.providerId ?? settings.providerId;
       const modelId = req.modelId ?? settings.modelId;
@@ -509,6 +526,7 @@ async function handlePanelRequest(req: PanelRequest, sender: chrome.runtime.Mess
     }
 
     case "resume_interrupted":
+      if (externalAgent.owns(tabId!)) throw new Error("Stop sharing this tab before resuming its run.");
       await resolveInterrupted(req.sessionId, req.action);
       return { ok: true };
 
@@ -538,11 +556,12 @@ async function handlePanelRequest(req: PanelRequest, sender: chrome.runtime.Mess
       const current = sessions.find(isBusy) ?? sessions.at(-1);
       const pendingPermissions = current ? permissions.pendingForSession(current.sessionId)
         .map(({ resolve: _resolve, ...request }) => request) : [];
-      return { sessions, settings, tabState, configuredProviders, userMemory, pendingPermissions,
+      return { sessions, settings, tabState, configuredProviders, userMemory, pendingPermissions, external: externalAgent.state(tabId!),
         planPending: !!current && planService.hasPending(current.sessionId) };
     }
 
     case "new_session": {
+      if (externalAgent.owns(req.tabId)) throw new Error("Stop sharing this tab before starting a new conversation.");
       if ((await sessionsForTab(req.tabId)).some(isBusy)) throw new Error("Stop this tab's run before starting a new conversation.");
       const settings = await loadTabState(req.tabId);
       if (!settings.providerId || !settings.modelId) throw new Error("no provider/model selected");
@@ -671,6 +690,7 @@ async function broadcast(evt: PanelEvent): Promise<void> {
 // ---------------------------------------------------------------------------
 
 chrome.tabs?.onRemoved?.addListener((tabId) => {
+  void externalAgent.disconnect(tabId, "Tab closed — access revoked");
   void (async () => {
     await ready;
     pendingPrompts.delete(tabId);

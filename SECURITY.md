@@ -26,6 +26,26 @@ certification, a comprehensive penetration test, or an evaluation of model quali
 
 ## Data flows and remaining risks
 
+### External MCP agents (v0.2.0)
+
+Local Codex/Hermes sessions can now use an authenticated companion to control
+explicitly shared tabs. Each process has an ephemeral loopback socket and random
+pairing secret. The extension enforces per-tab ownership, always asks for external
+mutations/navigation and new-origin reads, and uses strict CDP without automatic
+reattachment. Stop, cancellation, disconnect and timeout revoke access. Page
+confirmations are dismissed with `accept: false`, including in standalone mode.
+The shared API excludes arbitrary JavaScript, raw CDP and extension settings.
+The transport rejects page origins, rebinding Hosts, invalid tokens and spoofed
+results. [Full architecture, limits and test coverage](docs/mcp.md).
+
+External-session page content goes to the calling agent and its configured
+model. The extension/companion do not persist those results or pairing secrets;
+the caller can retain them in its own history and media cache. Sharing is a
+permission to read the initial site. Each subsequently visited origin asks
+again, and tab listings expose only the metadata explicitly shared initially.
+
+### Standalone mode
+
 The connected provider receives your prompt, conversation context, manually saved
 notes, and page text/screenshots accessed by the agent. There is no developer
 relay in the reviewed implementation. Provider-side logging, retention, billing

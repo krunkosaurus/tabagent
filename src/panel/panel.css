@@ -2201,3 +2201,14 @@ footer:has(.composer-wrap.busy) .composer-hint::after {
 #export-btn[data-empty="true"] {
   color: var(--fg-muted);
 }
+/* External agents remain visible and usable at narrow side-panel widths. */
+.external-panel { margin: 0 12px 8px; padding: 10px; border: 1px solid var(--border, #555); border-radius: 8px; font-size: 12px; flex-shrink: 0; max-height: 55vh; overflow: auto; }
+.external-panel summary { cursor: pointer; font-weight: 600; }
+.external-panel p { margin: 8px 0; line-height: 1.45; overflow-wrap: anywhere; }
+.external-panel input { box-sizing: border-box; width: 100%; padding: 8px; margin-top: 5px; background: transparent; color: inherit; border: 1px solid var(--border, #555); border-radius: 5px; }
+.external-panel button { padding: 6px 10px; margin: 4px 4px 0 0; cursor: pointer; }
+.external-panel [hidden] { display: none !important; }
+#external-approval { border-top: 1px solid var(--border, #555); margin-top: 10px; }
+#external-action { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow: auto; font-size: 11px; }
+#external-actions { padding-left: 20px; max-height: 100px; overflow: auto; overflow-wrap: anywhere; }
+.external-error { color: var(--error, #d97676); }

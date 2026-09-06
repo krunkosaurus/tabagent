@@ -8,7 +8,7 @@ let view: "chat" | "activity" = "activity";
 let pending = false;
 let send: (request: PanelRequest) => Promise<unknown>;
 
-export function renderChat(next: ExternalState | null): void {
+export function renderChat(next: ExternalState | null, follow?: boolean): void {
   const changed = next?.connectionId !== state?.connectionId;
   if (state?.chat?.attached && !next?.chat?.attached) el<HTMLTextAreaElement>("external-chat-input").value = "";
   if (changed) {
@@ -19,6 +19,8 @@ export function renderChat(next: ExternalState | null): void {
   if (next?.chat?.attached && (!state?.chat?.attached || changed)) view = "chat";
   state = next;
   const chat = state?.chat;
+  // Older Pi companions may still send empty assistant stream placeholders.
+  const messages = chat?.messages.filter((message) => message.text.trim()) ?? [];
   const attached = !!chat?.attached && !!state?.connected;
   const enabled = !!state?.connected && !["connecting", "stopping"].includes(state.phase);
   el("external-chat-invite").hidden = !chat || attached || !enabled;
@@ -28,10 +30,12 @@ export function renderChat(next: ExternalState | null): void {
   el("external-activity").classList.toggle("has-chat", attached);
   for (const name of ["chat", "activity"] as const) el(`external-view-${name}`).setAttribute("aria-pressed", String(view === name));
   el("external-chat-title").textContent = chat?.title ?? "";
-  el("external-chat-status").textContent = chat?.busy ? "Pi is working…" : "Pi is ready";
+  el("external-chat-status").textContent = state?.phase === "waiting" ? "Waiting for your approval"
+    : state?.phase === "running" ? `${state.actions.at(-1)?.summary ?? "Running browser action"}…`
+    : chat?.busy ? "Pi is working…" : "Pi is ready";
   el("external-chat-notice").textContent = chat?.notice ?? "";
   el("external-chat-truncated").hidden = !chat?.truncated;
-  el("external-chat-empty").hidden = !!chat?.messages.length;
+  el("external-chat-empty").hidden = !!messages.length;
   el<HTMLButtonElement>("external-chat-attach").disabled = pending || !enabled;
   el<HTMLButtonElement>("external-chat-detach").disabled = pending;
   el<HTMLButtonElement>("external-chat-abort").disabled = pending || !chat?.busy;
@@ -40,11 +44,11 @@ export function renderChat(next: ExternalState | null): void {
   el<HTMLTextAreaElement>("external-chat-input").placeholder = chat?.busy ? "Draft your next message while Pi works…" : "Continue with Pi…";
 
   const scroll = el("external-chat-scroll");
-  const follow = changed || scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 80;
+  const followMessages = changed || (follow ?? scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 80);
   const history = el("external-chat-messages");
-  const ids = new Set(chat?.messages.map((m) => m.id));
+  const ids = new Set(messages.map((m) => m.id));
   for (const node of Array.from(history.children)) if (!ids.has((node as HTMLElement).dataset.id!)) node.remove();
-  for (const message of chat?.messages ?? []) {
+  for (const message of messages) {
     let row = Array.from(history.children).find((node) => (node as HTMLElement).dataset.id === message.id) as HTMLElement | undefined;
     if (!row) {
       row = document.createElement("li");
@@ -60,7 +64,7 @@ export function renderChat(next: ExternalState | null): void {
     const content = row.lastElementChild!;
     if (content.textContent !== message.text) content.textContent = message.text;
   }
-  if (follow) scroll.scrollTop = scroll.scrollHeight;
+  if (followMessages) scroll.scrollTop = scroll.scrollHeight;
 }
 
 async function request(action: ChatRequest["action"], text?: string): Promise<void> {
@@ -84,6 +88,7 @@ export function initChat(sendRequest: (request: PanelRequest) => Promise<unknown
   send = sendRequest;
   for (const action of ["attach", "detach", "abort"] as const) el(`external-chat-${action}`).addEventListener("click", () => void request(action));
   for (const name of ["chat", "activity"] as const) el(`external-view-${name}`).addEventListener("click", () => { view = name; renderChat(state); });
+  el("external-chat-show-activity").addEventListener("click", () => { view = "activity"; renderChat(state); });
   el("external-chat-form").addEventListener("submit", (event) => {
     event.preventDefault();
     const text = el<HTMLTextAreaElement>("external-chat-input").value.trim();

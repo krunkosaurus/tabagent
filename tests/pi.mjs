@@ -59,6 +59,24 @@ try {
   assert(fixture.session.messages.some((m) => m.role === 'user' && JSON.stringify(m.content).includes('Continue from the browser')));
   console.log('PASS: terminal and panel use the same model context; partial replies stream without raw reasoning');
 
+  const quietStart = a.messages.length;
+  const quietRequests = fixture.requests.length;
+  fixture.plans.push(
+    { text: '', tool: { name: 'tabagent_tabs', args: {} } },
+    { text: ' \n', tool: { name: 'tabagent_tabs', args: {} } },
+    { text: '', tail: 'The browser tools finished.', hold: true },
+  );
+  await a.request('send', 'Use tools before replying');
+  await until(() => fixture.requests.length === quietRequests + 3 &&
+    a.state()?.messages.some((m) => m.text === 'Use tools before replying'), 'tool-only turns followed by thinking');
+  for (const message of a.messages.slice(quietStart).filter((m) => m.type === 'chat_state')) {
+    assert(message.state.messages.every((m) => m.text.trim()), 'tool-only and thinking-only turns must not become blank messages');
+  }
+  assert(!JSON.stringify(a.state()).includes('PRIVATE_REASONING'));
+  fixture.release();
+  await until(() => !a.state().busy && a.state().messages.some((m) => m.text === 'The browser tools finished.'), 'text after an empty stream start');
+  console.log('PASS: tool-only and thinking-only turns stay out of chat while later visible text still streams');
+
   fixture.plans.push({ text: 'Long operation', hold: true });
   await a.request('send', 'Run until stopped');
   await until(() => JSON.stringify(a.state()).includes('Long operation'), 'long operation started');

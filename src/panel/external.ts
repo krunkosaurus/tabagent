@@ -80,6 +80,9 @@ function renderActivity(state: ExternalState | null, follow: boolean): void {
   el("external-activity").hidden = !visible;
   el("messages").hidden = visible;
   el("chat-composer").hidden = visible;
+  const latest = state?.connected && state.chat?.attached ? state.actions.at(-1) : undefined;
+  el("external-chat-activity").hidden = !latest;
+  el("external-chat-actions").replaceChildren(...(latest ? [actionRow(latest)] : []));
   if (!state) { el("external-actions").replaceChildren(); return; }
   const scroll = el("external-activity-scroll");
   const last = state.actions.at(-1);
@@ -118,6 +121,9 @@ export function renderExternal(state: ExternalState | null): void {
       (state.connectionId === current.connectionId && state.revision < current.revision))) return;
   const scroll = el("external-activity-scroll");
   const follow = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 80;
+  // Measure before the latest-action card or approval box resizes the transcript.
+  const chatScroll = el("external-chat-scroll");
+  const followChat = chatScroll.scrollHeight - chatScroll.scrollTop - chatScroll.clientHeight < 80;
   const wasConnected = externalConnected();
   current = state;
   const connected = externalConnected();
@@ -145,7 +151,7 @@ export function renderExternal(state: ExternalState | null): void {
   el("external-reason").textContent = pending?.reason ?? "";
   el("external-action").textContent = pending ? `${pending.origin}\n${pending.name}\n${JSON.stringify(pending.input, null, 2)}` : "";
   renderActivity(state, follow);
-  renderChat(state);
+  renderChat(state, followChat);
 }
 
 export function initExternal(send: (request: PanelRequest) => Promise<unknown>): () => void {

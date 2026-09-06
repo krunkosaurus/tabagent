@@ -27,7 +27,7 @@ export class PiChat {
     for (const entry of this.ctx.sessionManager.getBranch()) {
       if (entry.type !== 'message') continue;
       const text = visibleText(entry.message);
-      if (text === null || !text) continue;
+      if (text === null || !text.trim()) continue;
       this.messages.push({ id: randomUUID(), role: entry.message.role, text });
       this.trim();
     }
@@ -77,14 +77,22 @@ export class PiChat {
       const text = visibleText(event.message);
       if (text !== null) {
         const role = event.message.role;
+        if (event.type === 'message_start') this.active.delete(role);
         let row = this.active.get(role);
-        if (!row || event.type === 'message_start') {
-          row = { id: randomUUID(), role, text: '' };
-          this.messages.push(row);
-          this.active.set(role, row);
+        // A stream can contain only thinking or tool calls. Wait for visible
+        // text before adding a transcript row or consuming its history budget.
+        if (text.trim()) {
+          if (!row) {
+            row = { id: randomUUID(), role, text };
+            this.messages.push(row);
+            this.active.set(role, row);
+          }
+          row.text = text;
+          this.trim();
+        } else if (row) {
+          this.messages = this.messages.filter((message) => message !== row);
+          this.active.delete(role);
         }
-        row.text = text;
-        this.trim();
         if (event.type === 'message_end') {
           this.active.delete(role);
           if (event.message.stopReason === 'error') this.notice = 'Pi reported an error. Check Pi for details.';

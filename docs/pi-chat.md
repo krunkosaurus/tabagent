@@ -54,8 +54,11 @@ include the Pi companion. Rebuild and restart Pi after updating the checkout.
    code, select your browser approval setting, and click **Share this tab**.
 3. Click **Chat with Pi in this tab**. This explicitly displays recent messages
    from that Pi conversation and lets this tab submit prompts to Pi.
-4. Send a follow-up. Switch between **Conversation** and **Browser activity** to
-   see replies or browser actions. Browser approvals remain visible in either view.
+4. Send a follow-up. **Conversation** shows replies and the latest browser action,
+   including its approval/running/result status and timing. Click **View all** or
+   **Browser activity** for the full action history. Browser approvals remain
+   visible in either view. Thinking-only and tool-only turns do not create empty
+   chat messages.
 
 You can continue typing in Pi as well. While Pi is busy, the browser lets you
 draft the next message; sending becomes available when Pi is idle. The panel

@@ -11,7 +11,7 @@ import { createPiFixture, until } from './pi-fixture.mjs';
 const pi = await createPiFixture();
 const errors = [];
 let context;
-const pageServer = createServer((_req, res) => res.end('<!doctype html><title>Pi browser fixture</title><h1>Blue lighthouse page</h1><button id="save" onclick="this.textContent=\'Saved\'">Save</button>'));
+const pageServer = createServer((_req, res) => res.end('<!doctype html><title>Pi browser fixture</title><h1>Blue lighthouse page</h1><button id="save" onclick="this.textContent=\'Saved\'">Save</button><div style="height:2400px">Scrollable page</div>'));
 const deadline = setTimeout(() => { throw new Error('Pi browser tests timed out'); }, 90_000);
 try {
   await new Promise((resolve) => pageServer.listen(0, '127.0.0.1', resolve));
@@ -114,6 +114,7 @@ try {
   await a.panel.locator('#external-chat-input').fill('Read this tab');
   await a.panel.locator('#external-chat-send').click();
   await until(() => a.panel.locator('#external-chat-send').isEnabled(), 'browser turn completes');
+  assert(await a.panel.locator('#external-chat-scroll').evaluate((node) => node.scrollHeight - node.scrollTop - node.clientHeight < 2), 'showing the first action card keeps the latest reply in view');
   await a.panel.locator('#external-view-activity').click();
   await until(() => a.panel.locator('.external-action-row[data-tool="snapshot"][data-status="done"]').count(), 'browser activity');
   assert(JSON.stringify(pi.requests.at(-1)).includes('Blue lighthouse page'));
@@ -137,6 +138,42 @@ try {
   await until(() => a.panel.locator('#external-chat-send').isEnabled(), 'click turn completed');
   console.log('PASS: Pi chats invoke real CDP browser tools, deliver images to Pi’s model and enforce mutation approval in the chat view');
 
+  const scrollBefore = await a.page.evaluate(() => scrollY);
+  const scrollRequests = pi.requests.length;
+  pi.plans.push(
+    { text: '', tool: { name: 'tabagent_scroll', args: { tabId: a.tabId, direction: 'down', amount: 400 } } },
+    { text: '', tail: 'Scrolled down.', hold: true },
+  );
+  await a.panel.locator('#external-chat-input').fill('Scroll down');
+  await a.panel.locator('#external-chat-send').click();
+  const latestScroll = a.panel.locator('#external-chat-actions [data-tool="scroll"]');
+  await until(() => latestScroll.getAttribute('data-status').then((status) => status === 'waiting'), 'inline scroll approval');
+  assert.equal(await latestScroll.isVisible(), true);
+  assert.match(await a.panel.locator('#external-chat-status').textContent(), /Waiting for your approval/);
+  assert.equal(await a.page.evaluate(() => scrollY), scrollBefore);
+  await a.panel.locator('#external-allow').click();
+  await until(() => latestScroll.getAttribute('data-status').then((status) => status === 'done'), 'inline scroll result');
+  await until(() => pi.requests.length === scrollRequests + 2, 'Pi receives scroll result');
+  assert(await a.page.evaluate(() => scrollY) > scrollBefore, 'the actual tab scrolled');
+  assert.match(await latestScroll.textContent(), /down · 400 pixels/);
+  assert.equal(await a.panel.locator('#external-chat-send').isDisabled(), true);
+  assert(await a.panel.locator('.external-chat-message > div').evaluateAll((nodes) => nodes.every((node) => node.textContent.trim())), 'no empty Pi rows during tool-only or thinking-only turns');
+  await a.panel.reload();
+  await until(() => latestScroll.isVisible(), 'inline action survives panel reload');
+  assert(await a.panel.locator('.external-chat-message > div').evaluateAll((nodes) => nodes.every((node) => node.textContent.trim())));
+  await a.panel.screenshot({ path: join(tmpdir(), 'tabagent-pi-chat-activity-review.png') });
+  for (const id of ['external-chat-activity', 'external-chat-input', 'external-chat-send', 'external-chat-abort']) {
+    const bounds = await a.panel.locator(`#${id}`).boundingBox();
+    assert(bounds && bounds.x >= 0 && bounds.x + bounds.width <= 360 && bounds.y + bounds.height <= 800, id);
+  }
+  await a.panel.locator('#external-chat-show-activity').click();
+  assert.equal(await a.panel.locator('#external-activity-scroll').isVisible(), true);
+  await a.panel.locator('#external-view-chat').click();
+  pi.release();
+  await until(() => a.panel.locator('#external-chat-send').isEnabled(), 'reply after quiet browser turn');
+  assert.match(await a.panel.locator('#external-chat-messages').textContent(), /Scrolled down\./);
+  console.log('PASS: tool-only scrolling shows approval and completion in chat, with no empty Pi rows during thinking or reload');
+
   pi.plans.push({ text: 'Still working', hold: true });
   await a.panel.locator('#external-chat-input').fill('Work until stopped');
   await a.panel.locator('#external-chat-send').click();
@@ -147,6 +184,7 @@ try {
   await a.panel.locator('#external-chat-detach').click();
   await until(() => a.panel.locator('#external-chat-pane').isHidden(), 'detach clears view');
   assert.equal(await a.panel.locator('#external-chat-messages').textContent(), '');
+  assert.equal(await a.panel.locator('#external-chat-actions').textContent(), '');
   await a.panel.locator('#external-chat-attach').click();
   await until(() => a.panel.locator('#external-chat-send').isEnabled(), 'reattach');
   pi.plans.push({ text: 'Independent Pi work', hold: true });
@@ -157,6 +195,7 @@ try {
   await until(() => a.panel.locator('#external-phase').textContent().then((t) => t === 'Sharing ended'), 'sharing ended');
   assert.equal(pi.session.isIdle, false, 'stop sharing does not abort unrelated Pi work');
   assert.equal(await a.panel.locator('#external-chat-messages').textContent(), '');
+  assert.equal(await a.panel.locator('#external-chat-actions').textContent(), '');
   pi.release();
   await until(() => pi.session.isIdle, 'Pi finished');
   assert.deepEqual(errors, []);

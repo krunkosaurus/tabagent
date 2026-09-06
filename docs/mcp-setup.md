@@ -47,6 +47,10 @@ Keep your existing agent settings and other MCP servers when adding these entrie
 The agent launches `mcp/server.mjs` over **stdio** and owns its stdin/stdout.
 Running `npm run mcp` in a separate terminal does not connect it to your agent.
 
+You can ask your agent to read the optional [agent usage notes](agent-setup-notes.md).
+The companion also supplies pairing and usage instructions during tool discovery;
+no repository instruction file is required.
+
 ### Codex
 
 Register the server from your terminal:
@@ -74,7 +78,33 @@ for host configuration details.
 
 ### Hermes
 
-Add this server under `mcp_servers` in `~/.hermes/config.yaml`:
+Tested with **Hermes 0.21.0**. Register the companion with `hermes mcp add`:
+
+**Choose the same profile you use for chat.** For a named profile, add
+`--profile NAME` before the subcommand in every Hermes command below, for example
+`hermes --profile coder mcp ls`. The CLI saves to that profile's config and shows
+the destination path. Plain `hermes` uses the active default profile.
+
+```sh
+hermes mcp add tabagent --command "/absolute/path/to/node" --args "/absolute/path/tabagent/mcp/server.mjs"
+```
+
+Keep `--args` last. After a successful connection, Hermes lists the 14 tools and
+asks whether to enable them; answer `Y`. If TabAgent is already registered, check
+its existing entry before replacing it, especially any custom tool filters.
+
+Set the tool-call timeout explicitly, then check registration:
+
+```sh
+hermes config set mcp_servers.tabagent.timeout 120
+hermes mcp ls
+hermes mcp test tabagent    # connects; should show 14 tools
+```
+
+For manual setup, merge this entry under `mcp_servers` in the same profile's
+`config.yaml`: normally `~/.hermes/config.yaml` for the default profile or
+`~/.hermes/profiles/<name>/config.yaml` for a named profile. A custom `HERMES_HOME`
+can change these paths. Preserve the other servers and settings in that file.
 
 ```yaml
 mcp_servers:
@@ -84,10 +114,23 @@ mcp_servers:
     timeout: 120
 ```
 
-Start a fresh Hermes session with this MCP toolset enabled. Hermes discovers
-the server's tools at startup and may prefix their names in its tool list.
-See [Hermes's MCP documentation](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp/)
-for configuration and tool filtering.
+Named profiles have separate MCP configs; they do not inherit the top-level
+entry. If `hermes mcp ls` does not show TabAgent, check that registration and chat
+target the same profile before adding it again. See
+[Hermes profiles](https://hermes-agent.nousresearch.com/docs/user-guide/profiles).
+
+Run `/reload-mcp` in the running session or start a fresh session in that profile,
+then confirm the tools appear. Hermes 0.21.0 exposes `tabagent_connect` as
+`mcp__tabagent__tabagent_connect`: the server prefix is added to the complete
+tool name. Use the names discovered by your installed version. Pair a tab from
+that session using the steps below; registration and `mcp test` only check a
+temporary connection. If an MCP reload disconnects the companion, request fresh
+pairing.
+
+The explicit 120-second client timeout leaves room for TabAgent's 90-second
+action deadline; it does not extend that deadline. See
+[Hermes's MCP documentation](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp/)
+for configuration, reloading and tool filtering.
 
 ### Pi
 

@@ -155,6 +155,8 @@ copyable configuration, pairing and troubleshooting:
 - [Hermes setup](docs/mcp-setup.md#hermes)
 - [Pi with in-tab chat](docs/pi-chat.md) or [Pi browser tools over MCP](docs/mcp-setup.md#pi)
 - [Other MCP clients](docs/mcp-setup.md#another-mcp-client)
+- [Agent usage notes](docs/agent-setup-notes.md) — an optional reference for
+  agents helping with setup, pairing and browser tools.
 
 The companion runs on the same computer as Chrome. Your agent starts it over
 **stdio** and supplies the model; your model server can run on other hardware.

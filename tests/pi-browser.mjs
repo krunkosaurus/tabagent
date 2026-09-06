@@ -109,11 +109,63 @@ try {
   await a.panel.screenshot({ path: join(tmpdir(), 'tabagent-pi-chat-review.png') });
   console.log('PASS: streamed replies render safely at 360px; reload restores chat without replay or Chrome persistence');
 
+  const thoughtStart = 'I will check the page before deciding what to do.\n';
+  const thoughtTail = `Thinking about the next browser action. `.repeat(20) + '\nLATEST_THOUGHT';
+  pi.plans.push({ thinking: thoughtStart, holdThinking: true, text: 'I have finished thinking.' });
+  await a.panel.locator('#external-chat-input').fill('Think about this page');
+  await a.panel.locator('#external-chat-send').click();
+  const thinking = a.panel.locator('#external-chat-thinking');
+  const thinkingBody = a.panel.locator('#external-chat-thinking-text');
+  const thinkingPreview = a.panel.locator('#external-chat-thinking-preview');
+  await until(() => a.panel.locator('#external-chat-thinking-label').textContent().then((text) => text === 'Thinking…'), 'live thinking line');
+  assert.equal(await thinking.evaluate((node) => node.open), false);
+  assert.equal(await thinkingBody.isVisible(), false, 'full thinking starts collapsed');
+  pi.think(thoughtTail);
+  await until(() => thinkingPreview.textContent().then((text) => text.endsWith('LATEST_THOUGHT')), 'single-line thinking updates');
+  const previewMetrics = await thinkingPreview.evaluate((node) => ({
+    remaining: node.scrollWidth - node.scrollLeft - node.clientWidth,
+    height: node.getBoundingClientRect().height,
+  }));
+  assert(previewMetrics.remaining < 2 && previewMetrics.height <= 24, 'one line follows the newest text');
+  assert(!(await a.panel.locator('#external-chat-messages').textContent()).includes('LATEST_THOUGHT'));
+  await a.panel.screenshot({ path: join(tmpdir(), 'tabagent-pi-thinking-collapsed.png') });
+  await thinking.locator('summary').click();
+  assert.equal(await thinkingBody.isVisible(), true);
+  await until(() => thinkingBody.evaluate((node) => node.getBoundingClientRect().bottom <= document.querySelector('#external-chat-scroll').getBoundingClientRect().bottom), 'expanded thinking is brought into view');
+  assert.equal(await thinkingBody.textContent(), thoughtStart + thoughtTail);
+  pi.think(`\n<img src=x onerror=alert(1)> ${code.slice(0, -8)} EXPANDED_THOUGHT`);
+  await until(() => thinkingBody.textContent().then((text) => text.endsWith('EXPANDED_THOUGHT')), 'expanded thinking continues streaming');
+  assert.equal(await thinking.evaluate((node) => node.open), true);
+  assert.equal(await thinking.locator('img').count(), 0);
+  assert(!(await thinkingBody.textContent()).includes(code.split(':')[2].slice(0, -8)));
+  await thinkingBody.evaluate((node) => { node.scrollTop = 0; });
+  pi.think('\nMore detail while the beginning is being read.');
+  await until(() => thinkingBody.textContent().then((text) => text.includes('beginning is being read')), 'thinking advances without moving the reader');
+  assert.equal(await thinkingBody.evaluate((node) => node.scrollTop), 0);
+  await a.panel.screenshot({ path: join(tmpdir(), 'tabagent-pi-thinking-expanded.png') });
+  const requestCount = pi.requests.length;
+  await a.panel.reload();
+  await until(() => thinkingPreview.textContent().then((text) => text.includes('beginning is being read')), 'thinking restores during a stream');
+  assert.equal(await thinking.evaluate((node) => node.open), false, 'reload restores thinking collapsed');
+  assert.equal(pi.requests.length, requestCount, 'restoring thinking never replays a prompt');
+  assert(!JSON.stringify(await b.panel.evaluate(() => window.chatBroadcasts)).includes('LATEST_THOUGHT'));
+  for (const area of ['local', 'session']) {
+    assert(!JSON.stringify(await a.panel.evaluate((area) => chrome.storage[area].get(null), area)).includes('LATEST_THOUGHT'));
+  }
+  await thinking.locator('summary').click();
+  pi.release();
+  await until(() => a.panel.locator('#external-chat-send').isEnabled(), 'thinking completed');
+  assert.equal(await a.panel.locator('#external-chat-thinking-label').textContent(), 'Thoughts');
+  assert.equal(await thinking.evaluate((node) => node.open), true, 'completion keeps the user’s expanded view');
+  assert((await thinkingBody.textContent()).includes('LATEST_THOUGHT'));
+  console.log('PASS: thinking stays on one live line, expands safely, respects reading position, restores collapsed and stays private to its tab');
+
   // The actual model calls the registered Pi tool; approvals still belong to Chrome.
   pi.plans.push({ text: 'Reading the page', tool: { name: 'tabagent_snapshot', args: { tabId: a.tabId } } }, { text: 'I read the page.' });
   await a.panel.locator('#external-chat-input').fill('Read this tab');
   await a.panel.locator('#external-chat-send').click();
   await until(() => a.panel.locator('#external-chat-send').isEnabled(), 'browser turn completes');
+  assert.equal(await thinking.evaluate((node) => node.open), false, 'new responses start collapsed');
   assert(await a.panel.locator('#external-chat-scroll').evaluate((node) => node.scrollHeight - node.scrollTop - node.clientHeight < 2), 'showing the first action card keeps the latest reply in view');
   await a.panel.locator('#external-view-activity').click();
   await until(() => a.panel.locator('.external-action-row[data-tool="snapshot"][data-status="done"]').count(), 'browser activity');
@@ -185,6 +237,8 @@ try {
   await until(() => a.panel.locator('#external-chat-pane').isHidden(), 'detach clears view');
   assert.equal(await a.panel.locator('#external-chat-messages').textContent(), '');
   assert.equal(await a.panel.locator('#external-chat-actions').textContent(), '');
+  assert.equal(await thinkingBody.textContent(), '');
+  assert.equal(await thinkingPreview.textContent(), '');
   await a.panel.locator('#external-chat-attach').click();
   await until(() => a.panel.locator('#external-chat-send').isEnabled(), 'reattach');
   pi.plans.push({ text: 'Independent Pi work', hold: true });
@@ -196,6 +250,7 @@ try {
   assert.equal(pi.session.isIdle, false, 'stop sharing does not abort unrelated Pi work');
   assert.equal(await a.panel.locator('#external-chat-messages').textContent(), '');
   assert.equal(await a.panel.locator('#external-chat-actions').textContent(), '');
+  assert.equal(await thinkingBody.textContent(), '');
   pi.release();
   await until(() => pi.session.isIdle, 'Pi finished');
   assert.deepEqual(errors, []);

@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { WebSocket } from 'ws';
 import { createPiFixture, until } from './pi-fixture.mjs';
 import { PiChat } from '../pi/chat.js';
-import { parsePairingCode, validateChatRequest, validateChatState } from '../build/mcp-tools.mjs';
+import { CHAT_THINKING_LIMIT, parsePairingCode, validateChatRequest, validateChatState } from '../build/mcp-tools.mjs';
 
 const fixture = await createPiFixture();
 const peers = [];
@@ -53,11 +53,32 @@ try {
   assert((await a.request('send', 'second message while busy')).error.includes('working'));
   assert(JSON.stringify(fixture.requests.at(-1)).includes('blue lighthouse'));
   assert(JSON.stringify(fixture.requests.at(-1)).includes('Message from the terminal'));
-  assert(!JSON.stringify(a.state()).includes('PRIVATE_REASONING'));
+  assert(!JSON.stringify(a.state().messages).includes('PRIVATE_REASONING'));
+  assert.equal(a.state().thinking.text, 'PRIVATE_REASONING');
   fixture.release();
   await until(() => !a.state().busy && JSON.stringify(a.state()).includes('Streaming reply complete'), 'stream completed');
   assert(fixture.session.messages.some((m) => m.role === 'user' && JSON.stringify(m.content).includes('Continue from the browser')));
-  console.log('PASS: terminal and panel use the same model context; partial replies stream without raw reasoning');
+  console.log('PASS: terminal and panel use the same model context; replies and thinking use separate fields');
+
+  fixture.plans.push({ thinking: 'Inspecting the shared page.', holdThinking: true, text: 'Thinking finished.' });
+  await a.request('send', 'Think before replying');
+  await until(() => a.state()?.thinking?.active, 'thinking before any reply text');
+  const thinkingId = a.state().thinking.id;
+  fixture.think(`\nKeep the code private: ${code.slice(0, -8)}\nLATEST_THOUGHT`);
+  await until(() => a.state()?.thinking?.text.endsWith('LATEST_THOUGHT'), 'thinking deltas');
+  assert.equal(a.state().thinking.id, thinkingId);
+  assert(!JSON.stringify(a.state()).includes(code.split(':')[2].slice(0, -8)), 'partial pairing tokens are redacted');
+  assert(!JSON.stringify(a.state().messages).includes('LATEST_THOUGHT'));
+  assert.equal(b.state(), undefined, 'thinking is only sent to the attached tab');
+  fixture.release();
+  await until(() => !a.state().busy, 'thinking run settled');
+  assert.equal(a.state().thinking.active, false);
+  assert.equal(a.state().thinking.id, thinkingId, 'completion preserves the disclosure identity');
+  console.log('PASS: thinking streams before reply text, redacts partial pairing codes and remains readable after completion');
+  fixture.plans.push({ thinking: '', text: 'This model did not expose thinking.' });
+  await a.request('send', 'Reply without thinking text');
+  await until(() => !a.state().busy && a.state().messages.some((m) => m.text === 'This model did not expose thinking.'), 'reply without model thinking');
+  assert.equal(a.state().thinking, undefined, 'a new turn never reuses previous thinking');
 
   const quietStart = a.messages.length;
   const quietRequests = fixture.requests.length;
@@ -72,7 +93,7 @@ try {
   for (const message of a.messages.slice(quietStart).filter((m) => m.type === 'chat_state')) {
     assert(message.state.messages.every((m) => m.text.trim()), 'tool-only and thinking-only turns must not become blank messages');
   }
-  assert(!JSON.stringify(a.state()).includes('PRIVATE_REASONING'));
+  assert(!JSON.stringify(a.state().messages).includes('PRIVATE_REASONING'));
   fixture.release();
   await until(() => !a.state().busy && a.state().messages.some((m) => m.text === 'The browser tools finished.'), 'text after an empty stream start');
   console.log('PASS: tool-only and thinking-only turns stay out of chat while later visible text still streams');
@@ -86,6 +107,7 @@ try {
   assert.equal(a.ws.readyState, WebSocket.OPEN, 'stopping Pi is separate from browser sharing');
   await a.request('detach');
   assert.deepEqual(a.state().messages, []);
+  assert.equal(a.state().thinking, undefined);
   await b.request('attach');
   assert.equal(b.state().attached, true);
   const count = fixture.requests.length;
@@ -107,6 +129,7 @@ try {
   assert.notEqual(c.sessionId, a.sessionId);
   await c.request('attach');
   assert.deepEqual(c.state().messages, []);
+  assert.equal(c.state().thinking, undefined);
   await assert.rejects(fixture.call('tabagent_snapshot', { tabId: 101 }), /not shared/);
   await assert.rejects(fixture.call('tabagent_navigate', { tabId: 103, url: 'file:///tmp/a' }), /HTTP/);
   const invocation = until(() => c.messages.find((m) => m.type === 'invoke'), 'native browser call');
@@ -130,17 +153,30 @@ try {
   const ctx = { isIdle: () => true, sessionManager: { getBranch: () => [
     { type: 'message', message: { role: 'toolResult', content: 'PRIVATE_TOOL_RESULT' } },
     ...Array.from({ length: 100 }, () => ({ type: 'message', message: { role: 'user', content: '\x00'.repeat(9000) } })),
-    { type: 'message', message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'PRIVATE_THOUGHT' }, { type: 'text', text: '<img src=x onerror=alert(1)>' }] } },
+    { type: 'message', message: { role: 'assistant', content: [
+      { type: 'thinking', thinking: 'x'.repeat(CHAT_THINKING_LIMIT) + 'VISIBLE_THOUGHT', thinkingSignature: 'PRIVATE_SIGNATURE' },
+      { type: 'thinking', thinking: 'REDACTED_THOUGHT', redacted: true, thinkingSignature: 'PRIVATE_SIGNATURE' },
+      { type: 'text', text: '<img src=x onerror=alert(1)>' },
+    ] } },
   ] } };
   const chat = new PiChat({ getSessionName: () => 'Private test' }, ctx);
   const bounded = { ...chat.snapshot(), attached: true, sessionId: chat.sessionId, revision: 1 };
   validateChatState(bounded);
-  assert(bounded.truncated && JSON.stringify(bounded).length < 100000);
-  assert(!JSON.stringify(bounded).includes('PRIVATE_TOOL_RESULT') && !JSON.stringify(bounded).includes('PRIVATE_THOUGHT'));
+  assert(bounded.truncated && JSON.stringify(bounded).length < 300_000);
+  for (const secret of ['PRIVATE_TOOL_RESULT', 'PRIVATE_SIGNATURE', 'REDACTED_THOUGHT']) assert(!JSON.stringify(bounded).includes(secret));
+  assert.equal(bounded.thinking.text.length, CHAT_THINKING_LIMIT);
+  assert.equal(bounded.thinking.truncated, true);
+  assert(bounded.thinking.text.endsWith('VISIBLE_THOUGHT'));
+  for (const thinking of [null, [], { ...bounded.thinking, text: 'x'.repeat(CHAT_THINKING_LIMIT + 1) },
+    { ...bounded.thinking, id: '../session' }, { ...bounded.thinking, active: 'yes' },
+    { ...bounded.thinking, signature: 'PRIVATE_SIGNATURE' }, { ...bounded.thinking, active: true }]) {
+    assert.throws(() => validateChatState({ ...bounded, thinking }));
+  }
+  assert.throws(() => validateChatState({ ...bounded, attached: false, messages: [], title: '', notice: '' }));
   assert.throws(() => validateChatState({ ...bounded, messages: [...bounded.messages, bounded.messages[0]] }));
   chat.close();
   assert.deepEqual(fixture.errors, []);
-  console.log('PASS: bounded chat schemas reject malformed input and repeated IDs; only recent visible text is serialized');
+  console.log('PASS: bounded chat/thinking schemas reject malformed input; tool output, redacted thinking and signatures stay private');
 } finally {
   clearTimeout(deadline);
   for (const ws of peers) ws.terminate();

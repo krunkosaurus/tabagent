@@ -1,5 +1,5 @@
 import type { ExternalState } from "../shared/external-tools";
-import type { ChatRequest } from "../shared/external-chat";
+import type { ChatRequest, ChatThinking } from "../shared/external-chat";
 import type { PanelRequest } from "../shared/protocol";
 
 const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -8,8 +8,25 @@ let view: "chat" | "activity" = "activity";
 let pending = false;
 let send: (request: PanelRequest) => Promise<unknown>;
 
+function renderThinking(thinking: ChatThinking | undefined, reset: boolean): void {
+  const details = el<HTMLDetailsElement>("external-chat-thinking");
+  const body = el("external-chat-thinking-text");
+  const follow = body.scrollHeight - body.scrollTop - body.clientHeight < 40;
+  if (reset || !thinking) { details.open = false; body.scrollTop = 0; }
+  details.hidden = !thinking;
+  el("external-chat-thinking-label").textContent = thinking ? thinking.active ? "Thinking…" : "Thoughts" : "";
+  const preview = el("external-chat-thinking-preview");
+  preview.textContent = thinking?.text.replace(/\s+/g, " ").trim().slice(-400) ?? "";
+  preview.scrollLeft = preview.scrollWidth;
+  // Model thinking is plain text, just like chat. It never becomes markup.
+  if (body.textContent !== (thinking?.text ?? "")) body.textContent = thinking?.text ?? "";
+  el("external-chat-thinking-truncated").hidden = !thinking?.truncated;
+  if (details.open && follow && !reset) body.scrollTop = body.scrollHeight;
+}
+
 export function renderChat(next: ExternalState | null, follow?: boolean): void {
   const changed = next?.connectionId !== state?.connectionId;
+  const thinkingChanged = changed || next?.chat?.thinking?.id !== state?.chat?.thinking?.id;
   if (state?.chat?.attached && !next?.chat?.attached) el<HTMLTextAreaElement>("external-chat-input").value = "";
   if (changed) {
     el<HTMLTextAreaElement>("external-chat-input").value = "";
@@ -22,6 +39,7 @@ export function renderChat(next: ExternalState | null, follow?: boolean): void {
   // Older Pi companions may still send empty assistant stream placeholders.
   const messages = chat?.messages.filter((message) => message.text.trim()) ?? [];
   const attached = !!chat?.attached && !!state?.connected;
+  const thinking = attached ? chat?.thinking : undefined;
   const enabled = !!state?.connected && !["connecting", "stopping"].includes(state.phase);
   el("external-chat-invite").hidden = !chat || attached || !enabled;
   el("external-views").hidden = !attached;
@@ -32,10 +50,11 @@ export function renderChat(next: ExternalState | null, follow?: boolean): void {
   el("external-chat-title").textContent = chat?.title ?? "";
   el("external-chat-status").textContent = state?.phase === "waiting" ? "Waiting for your approval"
     : state?.phase === "running" ? `${state.actions.at(-1)?.summary ?? "Running browser action"}…`
+    : thinking?.active ? "Pi is thinking…"
     : chat?.busy ? "Pi is working…" : "Pi is ready";
   el("external-chat-notice").textContent = chat?.notice ?? "";
   el("external-chat-truncated").hidden = !chat?.truncated;
-  el("external-chat-empty").hidden = !!messages.length;
+  el("external-chat-empty").hidden = !!messages.length || !!thinking;
   el<HTMLButtonElement>("external-chat-attach").disabled = pending || !enabled;
   el<HTMLButtonElement>("external-chat-detach").disabled = pending;
   el<HTMLButtonElement>("external-chat-abort").disabled = pending || !chat?.busy;
@@ -64,6 +83,7 @@ export function renderChat(next: ExternalState | null, follow?: boolean): void {
     const content = row.lastElementChild!;
     if (content.textContent !== message.text) content.textContent = message.text;
   }
+  renderThinking(thinking, thinkingChanged);
   if (followMessages) scroll.scrollTop = scroll.scrollHeight;
 }
 
@@ -71,6 +91,10 @@ async function request(action: ChatRequest["action"], text?: string): Promise<vo
   if (!state?.chat || !state.connected || pending) return;
   const connectionId = state.connectionId;
   const sessionId = state.chat.sessionId;
+  if (action === "send") {
+    const scroll = el("external-chat-scroll");
+    scroll.scrollTop = scroll.scrollHeight;
+  }
   pending = true;
   el("external-operation-error").textContent = "";
   renderChat(state);
@@ -89,6 +113,12 @@ export function initChat(sendRequest: (request: PanelRequest) => Promise<unknown
   for (const action of ["attach", "detach", "abort"] as const) el(`external-chat-${action}`).addEventListener("click", () => void request(action));
   for (const name of ["chat", "activity"] as const) el(`external-view-${name}`).addEventListener("click", () => { view = name; renderChat(state); });
   el("external-chat-show-activity").addEventListener("click", () => { view = "activity"; renderChat(state); });
+  const thinking = el<HTMLDetailsElement>("external-chat-thinking");
+  thinking.addEventListener("toggle", () => {
+    const preview = el("external-chat-thinking-preview");
+    preview.scrollLeft = preview.scrollWidth;
+    if (thinking.open) thinking.scrollIntoView({ block: "nearest" });
+  });
   el("external-chat-form").addEventListener("submit", (event) => {
     event.preventDefault();
     const text = el<HTMLTextAreaElement>("external-chat-input").value.trim();

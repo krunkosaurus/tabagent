@@ -1,14 +1,24 @@
 import { randomUUID } from 'node:crypto';
-import { CHAT_TEXT_LIMIT, CHAT_HISTORY_LIMIT } from '../build/mcp-tools.mjs';
+import { CHAT_TEXT_LIMIT, CHAT_HISTORY_LIMIT, CHAT_THINKING_LIMIT } from '../build/mcp-tools.mjs';
 
-// Only visible user/assistant text leaves Pi. No tool output, reasoning, image,
-// system prompt, session file path, or other conversation is serialized.
+// Redact even partially streamed pairing tokens, before clipping any text.
+const redact = (text) => text.replace(/tabagent:[1-9][0-9]{0,4}:[a-f0-9]*/g, '[pairing code hidden]');
+
+// Chat text and current model thinking have separate, bounded fields. No raw
+// tool output, images, signatures, system prompts or other sessions are copied.
 function visibleText(message) {
   if (!['user', 'assistant'].includes(message?.role)) return null;
   const content = message.content;
-  return (typeof content === 'string' ? content : (Array.isArray(content) ? content : [])
-    .filter((part) => part.type === 'text' && typeof part.text === 'string').map((part) => part.text).join('\n'))
-    .replace(/tabagent:[1-9][0-9]{0,4}:[a-f0-9]{64}/g, '[pairing code hidden]');
+  return redact(typeof content === 'string' ? content : (Array.isArray(content) ? content : [])
+    .filter((part) => part.type === 'text' && typeof part.text === 'string').map((part) => part.text).join('\n'));
+}
+
+function thinkingText(message) {
+  if (message?.role !== 'assistant' || !Array.isArray(message.content)) return undefined;
+  const parts = message.content.filter((part) => part.type === 'thinking' && !part.redacted && typeof part.thinking === 'string');
+  if (!parts.length) return undefined;
+  const text = redact(parts.map((part) => part.thinking).join('\n'));
+  return { text: text.slice(-CHAT_THINKING_LIMIT), truncated: text.length > CHAT_THINKING_LIMIT };
 }
 
 export class PiChat {
@@ -24,13 +34,19 @@ export class PiChat {
     this.messages = [];
     this.active.clear();
     this.truncated = false;
+    this.thinkingMessageId = undefined;
+    let thinking;
     for (const entry of this.ctx.sessionManager.getBranch()) {
       if (entry.type !== 'message') continue;
+      if (entry.message.role === 'user') thinking = undefined;
+      else thinking = thinkingText(entry.message) ?? thinking;
       const text = visibleText(entry.message);
       if (text === null || !text.trim()) continue;
       this.messages.push({ id: randomUUID(), role: entry.message.role, text });
       this.trim();
     }
+    this.thinking = thinking ? { ...thinking, active: false,
+      id: this.thinking?.text === thinking.text ? this.thinking.id : randomUUID() } : undefined;
   }
   trim() {
     let remaining = CHAT_HISTORY_LIMIT;
@@ -44,8 +60,11 @@ export class PiChat {
     if (this.messages.length > 40) { this.messages = this.messages.slice(-40); this.truncated = true; }
   }
   snapshot() {
-    return { busy: !!this.submitting || !this.ctx.isIdle(), title: (this.pi.getSessionName() || 'Current Pi conversation').slice(0, 80),
-      messages: this.messages, truncated: this.truncated, notice: this.notice };
+    const busy = !!this.submitting || !this.ctx.isIdle();
+    const thinking = this.thinking && (this.thinking.text.trim() || (this.thinking.active && busy))
+      ? { ...this.thinking, active: this.thinking.active && busy } : undefined;
+    return { busy, title: (this.pi.getSessionName() || 'Current Pi conversation').slice(0, 80),
+      messages: this.messages, truncated: this.truncated, notice: this.notice, ...(thinking ? { thinking } : {}) };
   }
   subscribe(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
   publish(immediate = false) {
@@ -69,11 +88,23 @@ export class PiChat {
       this.submitting = false;
       clearTimeout(this.deliveryTimer);
       this.notice = '';
+      this.thinking = undefined;
+      this.thinkingMessageId = undefined;
     } else if (event.type === 'agent_settled' || event.type === 'session_compact') {
       this.submitting = false;
       clearTimeout(this.deliveryTimer);
       this.restore();
     } else if (event.message) {
+      if (event.message.role === 'assistant') {
+        if (event.type === 'message_start') this.thinkingMessageId = undefined;
+        const kind = event.assistantMessageEvent?.type;
+        const thinking = thinkingText(event.message);
+        if (thinking || kind === 'thinking_start' || kind === 'thinking_delta') {
+          this.thinkingMessageId ??= randomUUID();
+          this.thinking = { ...(thinking ?? { text: '', truncated: false }), id: this.thinkingMessageId,
+            active: event.type !== 'message_end' && (!kind || kind === 'thinking_start' || kind === 'thinking_delta') };
+        } else if (this.thinking) this.thinking.active = false;
+      }
       const text = visibleText(event.message);
       if (text !== null) {
         const role = event.message.role;
@@ -139,5 +170,7 @@ export class PiChat {
     this.listeners.clear();
     this.messages = [];
     this.active.clear();
+    this.thinking = undefined;
+    this.thinkingMessageId = undefined;
   }
 }

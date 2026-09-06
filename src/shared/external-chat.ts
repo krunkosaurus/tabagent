@@ -1,7 +1,9 @@
 /** Small, versioned chat contract over the existing authenticated tab socket. */
 export const CHAT_TEXT_LIMIT = 8_000;
 export const CHAT_HISTORY_LIMIT = 12_000;
+export const CHAT_THINKING_LIMIT = 32_000;
 export interface ChatMessage { id: string; role: "user" | "assistant"; text: string }
+export interface ChatThinking { id: string; text: string; active: boolean; truncated: boolean }
 export interface ExternalChatState {
   sessionId: string;
   revision: number;
@@ -11,6 +13,7 @@ export interface ExternalChatState {
   messages: ChatMessage[];
   truncated: boolean;
   notice: string;
+  thinking?: ChatThinking;
 }
 export interface ChatRequest {
   type: "chat_request";
@@ -41,7 +44,13 @@ export function validateChatState(value: unknown): ExternalChatState {
       typeof s.attached !== "boolean" || typeof s.busy !== "boolean" || typeof s.truncated !== "boolean" ||
       typeof s.title !== "string" || s.title.length > 80 || typeof s.notice !== "string" || s.notice.length > 300 ||
       !Array.isArray(s.messages) || s.messages.length > 40 ||
-      Object.keys(s).some((k) => !["sessionId", "revision", "attached", "busy", "title", "messages", "truncated", "notice"].includes(k))) throw new Error("Invalid chat state");
+      Object.keys(s).some((k) => !["sessionId", "revision", "attached", "busy", "title", "messages", "truncated", "notice", "thinking"].includes(k))) throw new Error("Invalid chat state");
+  const thinking = s.thinking;
+  if (thinking !== undefined && (!thinking || typeof thinking !== "object" || Array.isArray(thinking) ||
+      !chatId(thinking.id) || typeof thinking.text !== "string" || thinking.text.length > CHAT_THINKING_LIMIT ||
+      typeof thinking.active !== "boolean" || typeof thinking.truncated !== "boolean" ||
+      !s.attached || (thinking.active && !s.busy) ||
+      Object.keys(thinking).some((k) => !["id", "text", "active", "truncated"].includes(k)))) throw new Error("Invalid chat thinking");
   let size = 0;
   const ids = new Set<string>();
   for (const m of s.messages) {

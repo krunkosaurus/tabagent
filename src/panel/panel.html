@@ -133,7 +133,7 @@
       <p id="external-operation-error" class="external-error" role="alert"></p>
       <div id="external-chat-invite" hidden>
         <strong>Continue your Pi conversation here</strong>
-        <p>Show recent messages in this tab and send prompts to Pi's current model, tools and permissions, including its local files and commands.</p>
+        <p>Show recent messages and model thinking in this tab, and send prompts to Pi's current model, tools and permissions, including its local files and commands.</p>
         <button id="external-chat-attach" type="button">Chat with Pi in this tab</button>
       </div>
       <div id="external-views" hidden>
@@ -155,6 +155,15 @@
           <p id="external-chat-truncated" hidden>Showing recent text only. Full history remains in Pi.</p>
           <p id="external-chat-empty">Your next message continues this Pi session.</p>
           <ol id="external-chat-messages" aria-label="Pi conversation"></ol>
+          <details id="external-chat-thinking" hidden>
+            <summary>
+              <span class="external-thinking-chevron" aria-hidden="true">›</span>
+              <span id="external-chat-thinking-label" role="status"></span>
+              <span id="external-chat-thinking-preview" aria-hidden="true"></span>
+            </summary>
+            <div id="external-chat-thinking-text" dir="auto"></div>
+            <p id="external-chat-thinking-truncated" hidden>Showing the latest 32,000 characters. Full thinking remains in Pi.</p>
+          </details>
         </div>
         <aside id="external-chat-activity" aria-label="Latest browser action" hidden>
           <div class="external-chat-controls">

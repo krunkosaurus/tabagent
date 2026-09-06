@@ -26,6 +26,7 @@ export async function createPiFixture() {
   const errors = [];
   const events = [];
   let release;
+  let writeThinking;
   const http = createServer(async (req, res) => {
     try {
       assert.equal(req.url, '/v1/chat/completions');
@@ -35,7 +36,13 @@ export async function createPiFixture() {
       const plan = plans.shift() ?? { text: 'Fixture reply.' };
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       const chunk = (delta, finish_reason = null) => res.write(`data: ${JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', model: 'test', choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
-      chunk({ role: 'assistant', content: '', reasoning_content: 'PRIVATE_REASONING' });
+      chunk({ role: 'assistant', content: '', reasoning_content: plan.thinking ?? 'PRIVATE_REASONING' });
+      if (plan.holdThinking) {
+        writeThinking = (text) => chunk({ reasoning_content: text });
+        await new Promise((resolve) => { release = resolve; res.once('close', resolve); });
+        writeThinking = undefined;
+        if (res.destroyed) return;
+      }
       chunk({ content: plan.text ?? 'Working…' });
       if (plan.hold) await new Promise((resolve) => { release = resolve; res.once('close', resolve); });
       if (res.destroyed) return;
@@ -77,6 +84,7 @@ export async function createPiFixture() {
     runtime, requests, plans, errors, events, scratch,
     get session() { return runtime.session; },
     release() { release?.(); release = undefined; },
+    think(text) { assert(writeThinking, 'model is holding a thinking stream'); writeThinking(text); },
     async call(name, args = {}, signal) {
       const tool = runtime.session.agent.state.tools.find((t) => t.name === name);
       assert(tool, `Native Pi tool ${name} exists`);

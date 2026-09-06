@@ -80,7 +80,7 @@ https://github.com/user-attachments/assets/2adfd956-d6e8-4b5c-893d-dc04f92abe66
 
 - **Local-agent MCP bridge** — pair Codex, Hermes or Pi from the sidebar, share specific tabs, and choose to approve each action or allow the connection once. Each session sees only its shared tabs; Stop revokes access. See [local agents](#local-agents-codex-hermes-pi-and-mcp).
 - **Live browser activity** — connected agents get a main activity view showing current actions, approvals, completed steps, errors and timings, with an explicit waiting state between browser calls.
-- **Continue Pi in the tab** — attach the running Pi conversation, stream replies and send follow-ups when Pi is idle. Conversation and browser activity share the panel; Stop Pi and Stop sharing have separate controls. [Install the Pi extension](docs/pi-chat.md).
+- **Continue Pi in the tab** — attach the running Pi conversation, stream replies and send follow-ups when Pi is idle. Thinking streams on one compact line; click to expand it. Conversation and browser activity share the panel; Stop Pi and Stop sharing have separate controls. [Install the Pi extension](docs/pi-chat.md).
 - **Any OpenAI-compatible provider** — Z.AI, Zhipu/BigModel, OpenAI, OpenRouter, DeepSeek, Groq, xAI (Grok), Mistral, Fireworks, Cerebras, Moonshot (Kimi), Hugging Face, or any custom endpoint (Ollama, LM Studio, …) through a single adapter
 - **11 CDP browser tools** — snapshot, click, type, scroll, hover, key presses, screenshots, text extraction, and more (see [Browser tools](#browser-tools))
 - **Resumable agent loop** — memory-only checkpoints survive service-worker restarts; conversations are cleared when Chrome exits

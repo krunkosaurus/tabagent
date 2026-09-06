@@ -60,6 +60,12 @@ include the Pi companion. Rebuild and restart Pi after updating the checkout.
    visible in either view. Thinking-only and tool-only turns do not create empty
    chat messages.
 
+When Pi's model streams thinking, one collapsed line follows its newest text.
+Click that line to expand the current thinking; it remains available as
+**Thoughts** when finished. Each new response starts collapsed. The expanded
+view scrolls independently, so you can read earlier text while new text arrives.
+Models that do not expose thinking continue to show the normal working status.
+
 You can continue typing in Pi as well. While Pi is busy, the browser lets you
 draft the next message; sending becomes available when Pi is idle. The panel
 does not enqueue or steer work. Prompts are text, up to 8,000 characters; slash
@@ -93,10 +99,14 @@ the same prompt again.
 
 The panel shows at most 40 recent user/assistant text messages, bounded to 12,000
 characters total and 8,000 per message; older or longer text is shortened. Full
-history stays in Pi. Raw tool output, reasoning blocks, images, system prompts,
-session file paths and pairing codes are excluded from the transcript. Visible
-assistant text can still quote page/tool content or contain private information.
-Text renders literally, without loading remote images or interpreting HTML.
+history stays in Pi. The latest model thinking for the current turn is shared
+separately with the attached tab, bounded to its latest 32,000 characters; a
+notice appears if it is shortened. Thinking is collapsed by default, including
+after panel reload. Raw tool output, images, system prompts, session file paths,
+redacted thinking blocks and provider signatures are excluded. Pairing codes,
+including partially streamed tokens, are hidden. Assistant text and thinking
+can still quote page/tool content. Both render literally, without loading remote
+images or interpreting HTML.
 
 The native adapter uses `pi.sendUserMessage`, Pi's message events and `ctx.abort`.
 It runs in the existing Pi process and shares `mcp/bridge.mjs` with the stdio MCP
@@ -105,11 +115,12 @@ there is no additional HTTP endpoint, daemon, credential file or arbitrary
 command RPC. Chat attachment is bound to a random session generation and one
 shared socket. Limits cover text, history, requests, socket buffering and waits.
 
-Within Chrome, prompts and transcripts use a private runtime port whose sender
-must be a trusted panel for that tab. They are never broadcast to other panels
-or saved in Chrome storage. Closing sharing clears the in-memory transcript;
-Pi retains messages according to its own session storage behavior. This trusts
-the installed extension and local Pi process, as the browser-only bridge does.
+Within Chrome, prompts, transcripts and thinking use a private runtime port
+whose sender must be a trusted panel for that tab. They are never broadcast to
+other panels or saved in Chrome storage. Closing sharing clears the in-memory
+transcript and thinking; Pi retains messages according to its own session
+storage behavior. This trusts the installed extension and local Pi process, as
+the browser-only bridge does.
 
 ## Verify your setup
 

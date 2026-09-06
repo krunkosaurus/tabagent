@@ -1,7 +1,10 @@
 # Local MCP companion
 
+For installation, client configuration, pairing and troubleshooting, start with
+the [local-agent MCP setup guide](mcp-setup.md).
+
 ```
-Codex / Hermes (one process per agent session)
+Codex / Hermes / Pi (one process per agent session)
   -> stdio MCP, official SDK
   -> mcp/server.mjs, ephemeral 127.0.0.1 WebSocket listener
   -> authenticated Chrome extension connection for each shared tab

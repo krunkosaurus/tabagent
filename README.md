@@ -23,6 +23,8 @@ cd tabagent
 
 Follow the [installation instructions](#installation) below to build it and load it into Chrome.
 
+**Using a local agent? [Set up TabAgent for Codex, Hermes or Pi](docs/mcp-setup.md).**
+
 <p align="center">
   <img src=".github/assets/banner.png" alt="TabAgent — turn any browser tab into an AI agent" width="100%" />
 </p>
@@ -99,6 +101,10 @@ npm ci --ignore-scripts
 npm run build
 ```
 
+For MCP use, complete steps 1–3 below, then follow the
+[local-agent setup guide](docs/mcp-setup.md). Steps 4–6 configure TabAgent's own
+standalone chat.
+
 1. Open `chrome://extensions` in Chrome (prefer a separate profile for browser automation).
 2. Enable **Developer mode**, click **Load unpacked**, and select this repository's **dist/** folder.
 3. Pin TabAgent, visit a regular web page, and open its panel using the toolbar or **Cmd/Ctrl+Shift+A**.
@@ -138,115 +144,46 @@ Credentials, settings, site grants and manually saved notes still persist locall
 
 ## Local agents: Codex, Hermes, Pi and MCP
 
-Build the repository and load/reload `dist/` in Chrome using the installation
-steps above. The companion needs Node.js 22+. It runs on the same computer as
-Chrome; your agent's model endpoint can be on your own hardware elsewhere.
+**[Connect your local agent to TabAgent](docs/mcp-setup.md)** — complete setup,
+copyable configuration, pairing and troubleshooting:
 
-Register it in Codex (replace `/absolute/path/tabagent` with your checkout):
+- [Codex setup](docs/mcp-setup.md#codex)
+- [Hermes setup](docs/mcp-setup.md#hermes)
+- [Pi setup](docs/mcp-setup.md#pi)
+- [Other MCP clients](docs/mcp-setup.md#another-mcp-client)
 
-```sh
-codex mcp add tabagent -- node /absolute/path/tabagent/mcp/server.mjs
-```
+The companion runs on the same computer as Chrome. Your agent starts it over
+**stdio** and supplies the model; your model server can run on other hardware.
+You can leave TabAgent's provider picker unconfigured when using MCP.
 
-For a desktop client, use an absolute path to your Node executable if `node`
-is not on its PATH. Allow time for sidebar approvals by adding
-`tool_timeout_sec = 120` to the `[mcp_servers.tabagent]` table in
-`~/.codex/config.toml`. Start a fresh Codex session and check `/mcp`. Tool
-descriptions and MCP server instructions explain pairing and usage automatically;
-an extra skill is not required.
+1. Build the checkout and load `dist/` in Chrome.
+2. Register `mcp/server.mjs` with your agent using the guide above, then start a
+   fresh agent session.
+3. Tell the agent: **“Use TabAgent to inspect my browser tab.”**
+4. Open TabAgent on the intended HTTP(S) page, expand **Local agent**, paste its
+   pairing code, choose an approval setting, and click **Share this tab**.
+5. Give the task in your agent's chat. The **Browser activity** view shows its
+   browser calls, approval waits, completed steps, errors and elapsed times.
 
-For Hermes, add this entry under the existing `mcp_servers` mapping in
-`~/.hermes/config.yaml`, preserving other servers:
+**Ask before each action** is the default: mutations, navigation and reading new
+sites require sidebar approval. **Allow for this connection** permits those
+operations, including form submissions, on this shared tab until disconnect.
+You can select it while pairing or on a pending prompt; re-pairing defaults to
+Ask. **Stop sharing** revokes access.
 
-```yaml
-mcp_servers:
-  tabagent:
-    command: node
-    args: ["/absolute/path/tabagent/mcp/server.mjs"]
-    timeout: 120
-```
+The activity view restores the latest 50 summaries when you reopen the panel
+during the connection. It explicitly says when it is waiting for another browser
+call. The agent's conversation stays in its own client.
 
-Start a fresh Hermes session with this MCP toolset enabled.
+Each tab has one owner; you can share several tabs with one agent. Pairing belongs
+to the companion process, so clients that reuse it across conversations also
+share access. Tool timeouts, cancellation, debugger loss, tab closure and
+extension reload end sharing. Already-dispatched actions cannot be undone.
 
-For **Pi**, install the MCP adapter (tested with version **2.32.1**):
-
-```sh
-pi install npm:pi-mcp-adapter@2.32.1
-```
-
-Add the following server to `~/.pi/agent/mcp.json`, preserving any existing
-settings and servers. Replace both absolute paths for your machine:
-
-```json
-{
-  "mcpServers": {
-    "tabagent": {
-      "command": "/absolute/path/to/node",
-      "args": ["/absolute/path/tabagent/mcp/server.mjs"],
-      "lifecycle": "lazy-keep-alive",
-      "requestTimeoutMs": 120000,
-      "directTools": true,
-      "toolPrefix": "none"
-    }
-  }
-}
-```
-
-Restart Pi and check `/mcp`. The adapter exposes the `tabagent_*` tools directly;
-`lazy-keep-alive` keeps the companion available after its first call so an idle
-timeout does not end your pairing. Configure the model in Pi as usual.
-If the tools have not appeared yet, run `/mcp reconnect tabagent` to refresh
-discovery.
-
-Each client launches its own companion over **stdio**. Do not start `npm run mcp`
-as a separate daemon: the client must own the process and its stdin/stdout.
-
-1. Tell your agent: **“Use TabAgent to inspect my browser tab.”**
-2. The agent calls `tabagent_connect` and gives you a session-only pairing code.
-3. Open TabAgent on the intended HTTP(S) page. Expand **Local agent**, paste the
-   code, and choose **Ask before each action** or **Allow for this connection**.
-   Click **Share this tab** and accept Chrome's local connection permission.
-4. Give the task in Codex, Hermes or Pi. The agent lists shared tabs with
-   `tabagent_tabs`, then uses `tabagent_snapshot` and the other browser tools.
-5. In Ask mode, approve or deny actions in the sidebar. You can also click
-   **Allow for this connection** on an approval prompt to continue without
-   repeated prompts. **Stop sharing** or the Stop button revokes the connection.
-
-While a local agent is connected, the main panel shows **Browser activity**:
-the current action, approval waits, completed steps, errors and elapsed times.
-It keeps the latest 50 action summaries and restores them when you reopen the
-panel during that connection. If no browser calls arrive, it explicitly says
-it is waiting for the agent. Give tasks and read the agent's conversation in
-Pi, Codex or Hermes; this view shows their browser calls. After sharing ends,
-the open panel keeps the outcome visible until you reconnect or return to chat.
-
-You can share several tabs with one agent by repeating step 3 with its code.
-Codex, Hermes and Pi can work on different tabs concurrently. A tab has one owner;
-stop sharing before giving it to another agent or using TabAgent's own chat.
-Isolation follows the MCP connection: a client that reuses one companion across
-conversations also shares its paired tabs across them. Use separate client
-processes/profiles when you need independent ownership.
-Keep pairing codes in your agent conversation and the extension UI, never in
-webpage content. Restarting the agent, reloading the extension, closing the tab,
-or stopping its debugger requires pairing again. Connections do not auto-resume.
-
-External connections default to **Ask before each action**: mutations,
-navigation and reading new origins require sidebar approval. **Allow for this
-connection** permits those actions, including form submissions and reading new
-sites, on this shared tab without further prompts. It lasts only for that tab's
-current connection, survives reopening the panel, and ends when sharing stops.
-Re-pairing defaults to Ask again. Standalone Auto mode and saved site grants do
-not set this policy. An unanswered tool call expires after 90 seconds and
-revokes that tab's access. Already-dispatched actions cannot be undone by Stop.
-
-The bridge supplies text snapshots and standard MCP image results. Inference is
-controlled by the calling agent, not by TabAgent's provider picker. Configure
-Hermes's image-analysis route to your local vision model as needed; Hermes may
-materialize MCP images as local `MEDIA:` files for its vision tools. Codex and
-Hermes can retain tool results in their own histories/caches. The companion and
-extension do not persist pairing secrets or external-session page results.
-
-See [MCP architecture and security](docs/mcp.md) for the protocol and tests.
+The bridge returns text snapshots and MCP images. The extension and companion
+keep pairing and page results in memory; the calling agent can retain them in
+its own history or media cache. See [MCP architecture and security](docs/mcp.md)
+for the protocol and tests.
 
 ## Providers
 

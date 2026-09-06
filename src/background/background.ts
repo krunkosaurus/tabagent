@@ -237,7 +237,7 @@ async function heartbeat(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 const PANEL_REQUEST_KINDS = new Set([
-  "external_connect", "external_stop", "external_decision",
+  "external_connect", "external_stop", "external_decision", "external_chat",
   "list_providers", "list_models", "seed_models", "validate_token", "connect_provider", "get_provider_connection",
   "select_model", "set_draft", "set_autonomy", "set_notifications", "set_theme", "get_memory",
   "set_memory", "delete_memory", "export_session", "send_message", "stop", "pause",
@@ -308,6 +308,11 @@ async function handlePanelRequest(req: PanelRequest, sender: chrome.runtime.Mess
     }
   }
   switch (req.kind) {
+    case "external_chat":
+      // runtime messages fan out to other extension pages. Prompts must use
+      // the sender-bound port, just like private transcript updates.
+      throw new Error("Use the tab's private chat connection.");
+
     case "external_connect":
       if (typeof req.code !== "string" || req.code.length > 100) throw new Error("Invalid pairing code");
       if ((await sessionsForTab(tabId!)).some(isBusy)) throw new Error("Stop this tab's current run before sharing it.");

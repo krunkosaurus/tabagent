@@ -81,6 +81,8 @@ export function parsePairingCode(code: string): { port: number; token: string } 
   return { port: Number(match[1]), token: match[2] };
 }
 
+export * from "./external-chat";
+import type { ExternalChatState } from "./external-chat";
 export type ExternalApprovalMode = "ask" | "connection";
 export type ExternalApprovalScope = "action" | "connection";
 
@@ -114,4 +116,5 @@ export interface ExternalState {
   pending?: ExternalApproval;
   actionCount: number;
   actions: ExternalAction[];
+  chat?: ExternalChatState;
 }

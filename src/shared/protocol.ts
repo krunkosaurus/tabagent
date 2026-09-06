@@ -13,13 +13,14 @@
 
 import type { Model, PlanStep, ProviderDefinition, QueuedMessage, Session, SessionState, StreamPart, SuggestedAction } from "../core/types";
 import type { UserFact, UserFactCategory } from "../core/storage";
-import type { ExternalApprovalMode, ExternalApprovalScope, ExternalState } from "./external-tools";
+import type { ExternalApprovalMode, ExternalApprovalScope } from "./external-tools";
 
 // ---------------------------------------------------------------------------
 // side panel -> SW
 // ---------------------------------------------------------------------------
 
 export type PanelRequest =
+  | { kind: "external_chat"; connectionId: string; request: import("./external-chat").ChatRequest }
   | { kind: "external_connect"; code: string; approvalMode?: ExternalApprovalMode }
   | { kind: "external_stop" }
   | { kind: "external_decision"; id: string; allow: boolean; scope?: ExternalApprovalScope }
@@ -65,7 +66,6 @@ export type PermissionDecision =
 // ---------------------------------------------------------------------------
 
 export type PanelEvent =
-  | { kind: "external_state"; tabId: number; external: ExternalState }
   | { kind: "selection_draft"; tabId: number }
   | { kind: "session_state"; session: Session }
   | { kind: "stream_part"; sessionId: string; part: StreamPart }

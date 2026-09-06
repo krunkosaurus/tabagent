@@ -116,7 +116,7 @@
       <div class="external-heading">
         <div class="external-heading-row">
           <div>
-            <div class="external-eyebrow">Browser activity</div>
+            <div id="external-eyebrow" class="external-eyebrow">Browser activity</div>
             <h1 id="external-agent-name"></h1>
           </div>
           <button id="external-stop" type="button" hidden>Stop sharing</button>
@@ -130,6 +130,17 @@
         <p id="external-permissions" hidden></p>
         <div id="external-metrics"></div>
       </div>
+      <p id="external-operation-error" class="external-error" role="alert"></p>
+      <div id="external-chat-invite" hidden>
+        <strong>Continue your Pi conversation here</strong>
+        <p>Show recent messages in this tab and send prompts to Pi's current model, tools and permissions, including its local files and commands.</p>
+        <button id="external-chat-attach" type="button">Chat with Pi in this tab</button>
+      </div>
+      <div id="external-views" hidden>
+        <button id="external-view-chat" type="button" aria-pressed="true">Conversation</button>
+        <button id="external-view-activity" type="button" aria-pressed="false">Browser activity</button>
+        <button id="external-chat-detach" type="button" title="Remove chat from this tab; browser sharing continues">Detach chat</button>
+      </div>
       <div id="external-approval" hidden>
         <p id="external-reason"></p>
         <pre id="external-action"></pre>
@@ -137,6 +148,26 @@
         <button id="external-allow-connection" type="button" aria-describedby="external-grant-help">Allow for this connection</button>
         <button id="external-deny" type="button">Deny action</button>
         <p id="external-grant-help">Allow for this connection permits actions, form submissions and reading new sites in this tab until you stop sharing.</p>
+      </div>
+      <div id="external-chat-pane" hidden>
+        <div id="external-chat-scroll">
+          <p id="external-chat-title"></p>
+          <p id="external-chat-truncated" hidden>Showing recent text only. Full history remains in Pi.</p>
+          <p id="external-chat-empty">Your next message continues this Pi session.</p>
+          <ol id="external-chat-messages" aria-label="Pi conversation"></ol>
+        </div>
+        <form id="external-chat-form">
+          <div class="external-chat-controls">
+            <span id="external-chat-status" role="status"></span>
+            <button id="external-chat-abort" type="button">Stop Pi</button>
+          </div>
+          <textarea id="external-chat-input" dir="auto" rows="3" maxlength="8000" aria-label="Message to Pi" placeholder="Continue with Pi…"></textarea>
+          <div class="external-chat-controls">
+            <span>Enter to send · Shift+Enter for newline</span>
+            <button id="external-chat-send" type="submit">Send to Pi</button>
+          </div>
+          <p id="external-chat-notice" role="status"></p>
+        </form>
       </div>
       <div id="external-activity-scroll">
         <div id="external-waiting">

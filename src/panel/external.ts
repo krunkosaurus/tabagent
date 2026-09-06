@@ -1,5 +1,6 @@
 import { parsePairingCode, type ExternalAction, type ExternalApprovalMode, type ExternalState } from "../shared/external-tools";
 import type { PanelRequest } from "../shared/protocol";
+import { initChat, renderChat } from "./external-chat";
 
 const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 let current: ExternalState | null = null;
@@ -83,17 +84,22 @@ function renderActivity(state: ExternalState | null, follow: boolean): void {
   const scroll = el("external-activity-scroll");
   const last = state.actions.at(-1);
   el("external-agent-name").textContent = state.agent;
+  el("external-eyebrow").textContent = state.chat?.attached ? "Connected session" : "Browser activity";
   el("external-activity").dataset.phase = state.phase;
   el("external-activity").dataset.lastStatus = last?.status ?? "";
+  el("external-activity").dataset.chatBusy = String(!!state.chat?.attached && !!state.chat.busy);
   const phase = state.phase === "connecting" ? "Connecting to your agent…"
     : state.phase === "waiting" ? "Waiting for your approval"
     : state.phase === "running" ? last?.summary ?? "Running browser action"
     : state.phase === "stopping" ? "Stopping browser access…"
     : state.phase === "disconnected" ? "Sharing ended"
+    : state.chat?.attached ? state.chat.busy ? "Pi is working…" : "Ready for your next message"
     : last?.status === "error" ? `Last action failed · waiting for ${state.agent}`
     : `Waiting for ${state.agent}${last ? "’s next browser action" : " to send a browser action"}`;
   el("external-phase").textContent = phase;
-  el("external-context").textContent = state.connected
+  el("external-context").textContent = state.chat?.attached
+    ? "Same Pi conversation and tools. You can continue here or in Pi."
+    : state.connected
     ? `Browser actions on this tab appear here. Continue the conversation in ${state.agent}.`
     : state.status;
   el("external-waiting").hidden = state.actions.length > 0;
@@ -139,12 +145,47 @@ export function renderExternal(state: ExternalState | null): void {
   el("external-reason").textContent = pending?.reason ?? "";
   el("external-action").textContent = pending ? `${pending.origin}\n${pending.name}\n${JSON.stringify(pending.input, null, 2)}` : "";
   renderActivity(state, follow);
+  renderChat(state);
 }
 
-export function initExternal(send: (request: PanelRequest) => Promise<unknown>): void {
+export function initExternal(send: (request: PanelRequest) => Promise<unknown>): () => void {
+  let updates: { port: chrome.runtime.Port; pending: Map<string, (error?: string) => void> } | undefined;
+  initChat((request) => new Promise<void>((resolve, reject) => {
+    if (request.kind !== "external_chat" || !updates) { reject(new Error("Chat connection ended. Check Pi before sending again.")); return; }
+    const active = updates;
+    const id = request.request.id;
+    const timer = setTimeout(() => active.pending.get(id)?.("No confirmation from Pi. Check Pi before sending again; this message will not be retried."), 12_000);
+    active.pending.set(id, (error) => {
+      clearTimeout(timer);
+      active.pending.delete(id);
+      if (error) reject(new Error(error)); else resolve();
+    });
+    try { active.port.postMessage(request); } catch { active.pending.get(id)?.("Chat connection ended. Check Pi before sending again."); }
+  }));
+  function connectUpdates(): void {
+    const port = chrome.runtime.connect({ name: "tabagent-external" });
+    const pending = new Map<string, (error?: string) => void>();
+    updates = { port, pending };
+    port.onMessage.addListener((message) => {
+      if ("external" in message) renderExternal(message.external);
+      else if (message.replyTo) pending.get(message.replyTo)?.(message.error);
+    });
+    port.onDisconnect.addListener(() => {
+      void chrome.runtime.lastError;
+      if (updates?.port === port) updates = undefined;
+      for (const finish of pending.values()) finish("Chat connection ended. Check Pi before sending again; this message will not be retried.");
+      if (current) renderExternal({ ...current, revision: current.revision + 1, connected: false,
+        phase: "disconnected", status: "Connection ended. Pair again to continue.", chat: undefined });
+      // Reopen only the view's subscription. Never reconnect or replay Pi work.
+      setTimeout(connectUpdates, 1000);
+    });
+  }
   setInterval(renderClocks, 1000);
   el("external-back").addEventListener("click", () => renderExternal(null));
-  const error = (e: unknown) => { el("external-status").textContent = (e as Error).message; };
+  const error = (e: unknown) => {
+    el("external-status").textContent = (e as Error).message;
+    el("external-operation-error").textContent = (e as Error).message;
+  };
   el("external-connect").addEventListener("click", () => {
     const input = el<HTMLInputElement>("external-code");
     const code = input.value.trim();
@@ -170,4 +211,5 @@ export function initExternal(send: (request: PanelRequest) => Promise<unknown>):
     const pending = current?.pending;
     if (pending) void send({ kind: "external_decision", id: pending.id, allow: true, scope: "connection" }).catch(error);
   });
+  return connectUpdates;
 }

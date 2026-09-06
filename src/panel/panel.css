@@ -2210,7 +2210,7 @@ footer:has(.composer-wrap.busy) .composer-hint::after {
 .external-panel [hidden] { display: none !important; }
 .external-error { color: var(--error, #d97676); }
 
-/* The connected agent owns the main view; its chat remains in its own client. */
+/* The connected agent owns the main view; chat is an optional host capability. */
 .external-panel[hidden], .external-activity[hidden], .external-activity [hidden],
 #messages[hidden], #chat-composer[hidden] { display: none !important; }
 #chat.external-view #provider-chip,
@@ -2235,6 +2235,7 @@ footer:has(.composer-wrap.busy) .composer-hint::after {
 .external-phase-row { display: flex; align-items: center; gap: 8px; margin-top: 18px; font-size: 13px; line-height: 1.5; font-weight: 600; }
 #external-phase-indicator { box-sizing: border-box; flex-shrink: 0; width: 9px; height: 9px; border-radius: 50%; background: var(--fg-muted); }
 .external-activity[data-phase="running"] #external-phase-indicator,
+.external-activity[data-phase="ready"][data-chat-busy="true"] #external-phase-indicator,
 .external-activity[data-phase="connecting"] #external-phase-indicator { width: 12px; height: 12px; background: transparent; border: 2px solid var(--border); border-top-color: var(--accent); animation: external-spin 1s linear infinite; }
 .external-activity[data-phase="waiting"] #external-phase-indicator { background: var(--accent); }
 .external-activity[data-phase="ready"][data-last-status="error"] #external-phase-indicator { background: var(--error, #d97676); }
@@ -2264,6 +2265,33 @@ footer:has(.composer-wrap.busy) .composer-hint::after {
 .external-action-detail { color: var(--fg-secondary); }
 .external-action-time { display: block; margin-top: 9px; color: var(--fg-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
 @keyframes external-spin { to { transform: rotate(360deg); } }
+#external-operation-error:empty { display: none; }
+#external-operation-error { margin: 8px 14px; font-size: 12px; overflow-wrap: anywhere; }
+#external-chat-invite { flex-shrink: 0; margin: 12px 14px 0; padding: 12px; border: 1px solid var(--accent); border-radius: 8px; font-size: 13px; }
+#external-chat-invite p { font-size: 12px; line-height: 1.5; color: var(--fg-secondary); }
+#external-views { display: flex; align-items: center; gap: 5px; flex-shrink: 0; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+#external-views button { padding: 7px 8px; }
+#external-views button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+#external-chat-detach { margin-left: auto; }
+.has-chat .external-heading { padding: 10px 14px; }
+.has-chat .external-phase-row { margin-top: 10px; }
+.has-chat #external-context, .has-chat #external-metrics { display: none; }
+#external-chat-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+#external-chat-scroll { flex: 1; min-height: 0; overflow: auto; padding: 12px 14px; scrollbar-width: thin; }
+#external-chat-title, #external-chat-truncated, #external-chat-empty { margin: 0 0 14px; font-size: 12px; color: var(--fg-muted); overflow-wrap: anywhere; }
+#external-chat-messages { list-style: none; margin: 0; padding: 0; }
+.external-chat-message { margin-bottom: 18px; overflow-wrap: anywhere; font-size: 14px; line-height: 1.6; }
+.external-chat-message > strong { display: block; color: var(--fg-muted); font-size: 11px; margin-bottom: 5px; }
+.external-chat-message > div { white-space: pre-wrap; }
+.external-chat-message.user { padding: 10px 12px; border-radius: 10px; background: var(--bg-elev); }
+#external-chat-form { padding: 10px 14px 12px; border-top: 1px solid var(--border); flex-shrink: 0; }
+#external-chat-input { box-sizing: border-box; display: block; width: 100%; resize: vertical; min-height: 56px; max-height: 20vh; margin: 9px 0; padding: 10px; border: 1px solid var(--border); border-radius: 8px; color: var(--fg); background: var(--bg-elev); font: inherit; font-size: 13px; }
+.external-chat-controls { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 10px; color: var(--fg-muted); }
+#external-chat-status { font-size: 12px; color: var(--fg-secondary); }
+#external-chat-send { color: var(--accent); border-color: var(--accent); }
+#external-chat-notice { font-size: 11px; line-height: 1.4; color: var(--fg-muted); margin: 8px 0 0; }
+#external-chat-notice:empty { display: none; }
+.external-activity button:disabled { opacity: .45; cursor: default; }
 @media (prefers-reduced-motion: reduce) {
   .external-activity #external-phase-indicator { animation: none !important; }
 }

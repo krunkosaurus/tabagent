@@ -270,10 +270,6 @@ function listenForEvents(): void {
 }
 
 async function handleEvent(e: PanelEvent): Promise<void> {
-  if (e.kind === "external_state") {
-    if (e.tabId === state.tabId) renderExternal(e.external);
-    return;
-  }
   if ("sessionId" in e && e.sessionId && e.sessionId !== state.sessionId) return;
 
   switch (e.kind) {
@@ -1858,8 +1854,8 @@ async function clearAllMemory(): Promise<void> {
 
 
 document.addEventListener("DOMContentLoaded", () => {
-  initExternal(send);
-  void boot().catch((e) => setNotice(`Could not restore this tab: ${(e as Error).message}`, true));
+  const startExternalUpdates = initExternal(send);
+  void boot().then(startExternalUpdates).catch((e) => setNotice(`Could not restore this tab: ${(e as Error).message}`, true));
   $("send-btn")?.addEventListener("click", () => void onSend());
   $("stop-btn")?.addEventListener("click", () => onStop());
   // Provider chip -> open picker.

@@ -4,7 +4,9 @@
  */
 import { createBrowserToolRegistry } from "../tools/browser-tools";
 import { sendCommandOnce } from "../tools/cdp";
-import { webURL } from "../core/security";
+import { isExtensionPage, webURL } from "../core/security";
+import { panelTabId } from "../shared/panel-target";
+import { chatId, emptyChat, validateChatRequest, validateChatState, type ChatRequest } from "../shared/external-chat";
 import { EXTERNAL_TOOLS, parsePairingCode, validateExternalTool, type ExternalAction, type ExternalApprovalMode, type ExternalApprovalScope, type ExternalState } from "../shared/external-tools";
 
 interface Decision { allow: boolean; scope: ExternalApprovalScope }
@@ -22,14 +24,39 @@ interface Connection {
   cleanup?: Promise<void>;
   decide?: (decision: Decision) => void;
   seen: Set<string>;
+  chatRequested?: boolean;
+  chatPending: Map<string, { finish: (error?: string) => void }>;
 }
 const registry = createBrowserToolRegistry();
 const connections = new Map<number, Connection>();
 const MAX_MESSAGE = 100_000;
+const panels = new Map<chrome.runtime.Port, number>();
+
+// Unlike runtime.sendMessage broadcasts, these ports deliver conversation text
+// only to extension panels belonging to this tab. Content scripts cannot join.
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "tabagent-external") return;
+  if (!port.sender || !isExtensionPage(port.sender, ["panel.html"])) {
+    port.disconnect(); return;
+  }
+  const tabId = panelTabId(port.sender.url)!;
+  panels.set(port, tabId);
+  port.onDisconnect.addListener(() => panels.delete(port));
+  port.onMessage.addListener((message) => {
+    if (message?.kind !== "external_chat" || !chatId(message.request?.id)) { port.disconnect(); return; }
+    const reply = (error?: string) => {
+      try { port.postMessage({ replyTo: message.request.id, ...(error ? { error } : {}) }); } catch { /* Panel closed; never replay. */ }
+    };
+    void externalAgent.chat(tabId, message.connectionId, message.request).then(() => reply(), (error) => reply((error as Error).message));
+  });
+  port.postMessage({ external: connections.get(tabId)?.state ?? null });
+});
 
 function publish(s: Connection): void {
   s.state.revision++;
-  void chrome.runtime.sendMessage({ kind: "external_state", tabId: s.state.tabId, external: s.state }).catch(() => {});
+  for (const [port, tabId] of panels) if (tabId === s.state.tabId) {
+    try { port.postMessage({ external: s.state }); } catch { panels.delete(port); }
+  }
 }
 
 function actionDetails(name: string, input: Record<string, unknown>): Pick<ExternalAction, "summary" | "detail"> {
@@ -202,7 +229,7 @@ export const externalAgent = {
         tabId, connected: true, phase: "connecting", approvalMode,
         agent: "Local agent", status: "Connecting…", actionCount: 0, actions: [],
       },
-      ws, controller: new AbortController(), closed: false, attached: false, seen: new Set(),
+      ws, controller: new AbortController(), closed: false, attached: false, seen: new Set(), chatPending: new Map(),
     };
     connections.set(tabId, s);
     publish(s);
@@ -219,6 +246,10 @@ export const externalAgent = {
         if (msg.type === "ready" && !s.setup) {
           if (typeof msg.agent !== "string" || msg.agent.length > 80) throw new Error("Invalid agent name");
           s.state.agent = msg.agent;
+          if (msg.chatSessionId !== undefined) {
+            if (!chatId(msg.chatSessionId)) throw new Error("Invalid chat session");
+            s.state.chat = emptyChat(msg.chatSessionId);
+          }
           s.setup = (async () => {
             await chrome.debugger.attach({ tabId }, "1.3");
             s.attached = true;
@@ -247,6 +278,15 @@ export const externalAgent = {
           }, 15_000);
         } else if (msg.type === "pong") {
           lastPong = Date.now();
+        } else if (msg.type === "chat_state" && s.heartbeat && s.state.chat) {
+          const chat = validateChatState(msg.state);
+          if (chat.sessionId !== s.state.chat.sessionId || (chat.attached && !s.chatRequested)) throw new Error("Unrequested chat");
+          if (chat.revision > s.state.chat.revision) { s.state.chat = chat; publish(s); }
+        } else if (msg.type === "chat_ack" && s.heartbeat && s.state.chat) {
+          const pending = s.chatPending.get(msg.id);
+          if (!pending || msg.sessionId !== s.state.chat.sessionId ||
+              (msg.error !== undefined && (typeof msg.error !== "string" || msg.error.length > 300))) throw new Error("Invalid chat acknowledgment");
+          pending.finish(msg.error);
         } else if (msg.type === "invoke" && s.heartbeat) {
           if (s.running || typeof msg.id !== "string" || !/^[a-f0-9-]{36}$/.test(msg.id) || s.seen.has(msg.id) ||
               typeof msg.name !== "string" || msg.name.length > 64 || s.seen.size >= 5000) throw new Error("Invalid, repeated or concurrent action");
@@ -257,6 +297,29 @@ export const externalAgent = {
         void revoke(s, "Invalid bridge message — tab access revoked");
       }
     };
+  },
+
+  async chat(tabId: number, connectionId: string, input: ChatRequest): Promise<void> {
+    const request = validateChatRequest(input);
+    const s = connections.get(tabId);
+    if (!s || s.closed || !s.heartbeat || s.state.connectionId !== connectionId ||
+        s.state.chat?.sessionId !== request.sessionId || s.ws.readyState !== WebSocket.OPEN) throw new Error("Chat connection has ended. Pair again.");
+    if (s.chatPending.has(request.id) || s.chatPending.size >= 4) throw new Error("Wait for the previous chat request.");
+    if (request.action !== "attach" && !s.state.chat.attached) throw new Error("Attach chat to this tab first.");
+    if (request.action === "attach") s.chatRequested = true;
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        // The request may already be in Pi. Revoke access; never retry it.
+        void revoke(s, "Chat response timed out. Check Pi before sending again.");
+      }, 10_000);
+      s.chatPending.set(request.id, { finish: (error) => {
+        clearTimeout(timer);
+        s.chatPending.delete(request.id);
+        if ((request.action === "attach" && error && !s.state.chat?.attached) || (request.action === "detach" && !error)) s.chatRequested = false;
+        if (error) reject(new Error(error)); else resolve();
+      } });
+      s.ws.send(JSON.stringify(request));
+    });
   },
 
   decide(tabId: number, id: string, allow: boolean, scope: ExternalApprovalScope = "action"): void {
@@ -275,6 +338,9 @@ export const externalAgent = {
     if (s.cleanup) return s.cleanup;
     // Abort synchronously; already-dispatched browser input cannot be undone.
     s.closed = true;
+    for (const pending of s.chatPending.values()) pending.finish("Connection ended. Check Pi before sending again; this request will not be retried.");
+    s.chatRequested = false;
+    if (s.state.chat) s.state.chat = emptyChat(s.state.chat.sessionId, s.state.chat.revision + 1);
     s.controller.abort(new Error("Tab access revoked"));
     s.decide?.({ allow: false, scope: "action" });
     s.decide = undefined;

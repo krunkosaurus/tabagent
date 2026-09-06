@@ -26,6 +26,28 @@ certification, a comprehensive penetration test, or an evaluation of model quali
 
 ## Data flows and remaining risks
 
+### Native Pi chat (v0.3.0)
+
+The optional Pi extension lets one explicitly attached shared tab show recent
+user/assistant text and submit prompts to the current Pi session. These prompts
+have the same authority as terminal prompts: Pi's file/command tools remain
+governed by Pi, while browser actions remain governed by TabAgent approvals.
+Attaching chat is a separate user action from sharing browser access.
+
+Both directions use the existing authenticated loopback socket and private
+Chrome runtime ports, validated against the panel's immutable tab identity.
+Other panels and content scripts cannot subscribe to that transcript or send
+prompts into it. No host chat is exposed through generic MCP tools. Session
+replacement, branch changes and reload revoke the old pairing. Requests are
+bounded, deduplicated and never automatically replayed after uncertain delivery.
+
+The transcript contains bounded recent visible text only, rendered literally;
+raw reasoning, tool output, images and system prompts are excluded. User or
+assistant text can itself contain private information. Pi may persist the
+conversation; Chrome does not save this transcript or its drafts. Stop sharing
+revokes browser/chat access but does not cancel unrelated Pi work already
+submitted. [Setup, controls, limits and tests](docs/pi-chat.md).
+
 ### External MCP agents (v0.2.2)
 
 Local Codex/Hermes/Pi sessions can use an authenticated companion to control

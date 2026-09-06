@@ -47,7 +47,7 @@ This comparison uses the original project's
 [v0.1.6 source](https://github.com/binSaed/tabagent/tree/06d65d136b0ae3703b55542294055d02a09cc8e5)
 as the baseline. The original supplies the OpenAI-compatible provider adapter,
 11 browser tools, standalone agent loop, translation skill and chat UI.
-These are the changes I've added in this fork through **v0.2.2**:
+These are the changes I've added in this fork through **v0.3.0**:
 
 | Area | Original v0.1.6 | This fork |
 | --- | --- | --- |
@@ -55,6 +55,7 @@ These are the changes I've added in this fork through **v0.2.2**:
 | **Independent tabs** | A global side panel targets the active tab when opened. | Each tab owns its panel, conversation, draft, model choice and approvals. Runs stay on their original tab. External agents can control multiple explicitly shared tabs, with one owner per tab. |
 | **Connection approvals** | Standalone Ask/Auto modes and site grants. | External connections have their own **Ask before each action** or **Allow for this connection** setting. The latter permits actions, submissions and new sites on that shared tab until disconnect; re-pairing defaults to Ask. Added in **v0.2.1**. |
 | **Visible external activity** | The chat UI reports the extension's own agent loop. | The main panel shows incoming browser actions, approval waits, completed steps, errors and elapsed time. It restores the latest 50 summaries during the connection and says when it is waiting for the calling agent. Added in **v0.2.2**. |
+| **Chat with your running Pi agent** | Chat runs only the extension's own agent. | An optional native Pi extension lets one explicitly attached tab continue the current Pi conversation, stream replies and stop Pi. Uses Pi's existing model, history, tools and permissions. Prompts and transcripts stay on private, tab-bound connections. Added in **v0.3.0**. |
 | **Custom model connections** | Custom endpoints are supported, but saved connections have no editor and live model selection has gaps. | Edit saved endpoints and keys, retain discovered model choices, and request host permission before validation. Changing the server requires an explicit key choice. |
 | **Vision and tool history** | Screenshot bytes can be replaced before inference; tool results can lack matching calls. | Preserve assistant tool calls, deliver screenshots as images to compatible vision models, and return standard MCP image results to external agents. |
 | **Privacy and saved notes** | Conversation checkpoints are mirrored to disk; models can write memories and trigger automatic extraction. | Keep conversations and drafts in browser-session memory, remove old checkpoint mirrors, and use manually edited notes. Selection actions fill a draft for the user to send. |
@@ -64,7 +65,8 @@ These are the changes I've added in this fork through **v0.2.2**:
 The MCP connection is local and requires you to open TabAgent on the intended
 tab and share it with a session pairing code. **Stop sharing** revokes access;
 the agent cannot silently enable the extension on other tabs. The activity view
-reports browser calls; the agent's conversation stays in its own client.
+reports browser calls. Pi users can also [continue their conversation inside
+the tab](docs/pi-chat.md) using the native Pi integration.
 
 See the [security findings and remaining limits](SECURITY.md),
 [tab-instance architecture](docs/architecture.md), and
@@ -78,6 +80,7 @@ https://github.com/user-attachments/assets/2adfd956-d6e8-4b5c-893d-dc04f92abe66
 
 - **Local-agent MCP bridge** — pair Codex, Hermes or Pi from the sidebar, share specific tabs, and choose to approve each action or allow the connection once. Each session sees only its shared tabs; Stop revokes access. See [local agents](#local-agents-codex-hermes-pi-and-mcp).
 - **Live browser activity** — connected agents get a main activity view showing current actions, approvals, completed steps, errors and timings, with an explicit waiting state between browser calls.
+- **Continue Pi in the tab** — attach the running Pi conversation, stream replies and send follow-ups when Pi is idle. Conversation and browser activity share the panel; Stop Pi and Stop sharing have separate controls. [Install the Pi extension](docs/pi-chat.md).
 - **Any OpenAI-compatible provider** — Z.AI, Zhipu/BigModel, OpenAI, OpenRouter, DeepSeek, Groq, xAI (Grok), Mistral, Fireworks, Cerebras, Moonshot (Kimi), Hugging Face, or any custom endpoint (Ollama, LM Studio, …) through a single adapter
 - **11 CDP browser tools** — snapshot, click, type, scroll, hover, key presses, screenshots, text extraction, and more (see [Browser tools](#browser-tools))
 - **Resumable agent loop** — memory-only checkpoints survive service-worker restarts; conversations are cleared when Chrome exits
@@ -94,7 +97,7 @@ https://github.com/user-attachments/assets/2adfd956-d6e8-4b5c-893d-dc04f92abe66
 
 ## Installation
 
-Requires Chrome 120+ and Node.js 22+ for this development setup.
+Requires Chrome 120+ and Node.js 22.19+ for this development setup.
 
 ```sh
 npm ci --ignore-scripts
@@ -149,7 +152,7 @@ copyable configuration, pairing and troubleshooting:
 
 - [Codex setup](docs/mcp-setup.md#codex)
 - [Hermes setup](docs/mcp-setup.md#hermes)
-- [Pi setup](docs/mcp-setup.md#pi)
+- [Pi with in-tab chat](docs/pi-chat.md) or [Pi browser tools over MCP](docs/mcp-setup.md#pi)
 - [Other MCP clients](docs/mcp-setup.md#another-mcp-client)
 
 The companion runs on the same computer as Chrome. Your agent starts it over
@@ -173,7 +176,11 @@ Ask. **Stop sharing** revokes access.
 
 The activity view restores the latest 50 summaries when you reopen the panel
 during the connection. It explicitly says when it is waiting for another browser
-call. The agent's conversation stays in its own client.
+call. With standard MCP, chat stays in the agent's client. The optional native
+Pi extension adds **Chat with Pi in this tab** after pairing. It continues the
+same Pi session and keeps browser approvals in the panel. Its prompts can use
+all tools enabled in Pi, including local files and commands; the browser approval
+setting governs browser actions only.
 
 Each tab has one owner; you can share several tabs with one agent. Pairing belongs
 to the companion process, so clients that reuse it across conversations also

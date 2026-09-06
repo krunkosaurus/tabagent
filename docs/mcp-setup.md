@@ -9,7 +9,7 @@ Choose your setup: [Codex](#codex), [Hermes](#hermes), [Pi](#pi), or
 
 ## Build and load the extension
 
-You need Chrome 120+, Node.js 22+, and an installed local agent with its model
+You need Chrome 120+, Node.js 22.19+, and an installed local agent with its model
 already configured. Run the agent and companion on the same computer as Chrome.
 Your model server can run on another machine, such as your local GPU server.
 
@@ -90,6 +90,14 @@ See [Hermes's MCP documentation](https://hermes-agent.nousresearch.com/docs/user
 for configuration and tool filtering.
 
 ### Pi
+
+**For chat inside the TabAgent panel, use the [native Pi extension](pi-chat.md).**
+It supplies the same browser tools and connects the current Pi conversation;
+no MCP adapter is needed for TabAgent. If you already use the configuration
+below, the native setup guide explains how to replace just its TabAgent entry.
+
+The following MCP setup provides browser tools and activity only. Choose one
+Pi integration; loading both registers competing TabAgent tool names.
 
 Install the MCP adapter for the Pi coding agent (tested with **2.32.1**):
 

@@ -6,7 +6,7 @@ the [local-agent MCP setup guide](mcp-setup.md).
 ```
 Codex / Hermes / Pi (one process per agent session)
   -> stdio MCP, official SDK
-  -> mcp/server.mjs, ephemeral 127.0.0.1 WebSocket listener
+  -> mcp/server.mjs -> mcp/bridge.mjs, ephemeral 127.0.0.1 WebSocket listener
   -> authenticated Chrome extension connection for each shared tab
   -> external-agent.ts: ownership, origin checks, approvals, cancellation
   -> existing browser tool registry, strict CDP, isolated JavaScript world
@@ -19,6 +19,11 @@ the companion's copy to `build/mcp-tools.mjs`; Chrome assets remain in `dist/`.
 The local Node process uses the official MCP SDK for discovery, initialization,
 stdio framing and cancellation. It does not make model requests or sample via
 the client. The caller owns the reasoning loop, memory, model and vision route.
+
+The optional [native Pi extension](pi-chat.md) registers these same browser
+tools directly in Pi and reuses `mcp/bridge.mjs`. It additionally connects Pi's
+current chat over the authenticated tab socket after explicit attachment.
+Standard MCP does not expose a chat tool or grant access to the host conversation.
 
 ## Pairing and trust boundaries
 
@@ -94,6 +99,12 @@ or model inference; an idle connection is labeled as waiting for an action.
 Connection revisions prevent buffered events from overwriting newer restored
 activity. Stopping interrupts the current row and leaves the outcome visible
 in the open panel; a new connection starts a fresh history.
+
+Activity updates use private Chrome runtime ports bound to the panel's tab.
+Native Pi chat prompts and transcript updates use those same private ports;
+ordinary extension message broadcasts cannot carry chat. The Pi adapter's
+session generation and one-tab attachment add conversation isolation on top of
+browser ownership. See [Pi chat boundaries and limits](pi-chat.md#privacy-and-implementation).
 
 `npm test` covers real MCP discovery/stdio, session isolation, argument rejection,
 origin/Host/token rejection, response spoofing, image encoding and cancellation.

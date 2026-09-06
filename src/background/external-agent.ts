@@ -5,7 +5,7 @@
 import { createBrowserToolRegistry } from "../tools/browser-tools";
 import { sendCommandOnce } from "../tools/cdp";
 import { webURL } from "../core/security";
-import { EXTERNAL_TOOLS, parsePairingCode, validateExternalTool, type ExternalApprovalMode, type ExternalApprovalScope, type ExternalState } from "../shared/external-tools";
+import { EXTERNAL_TOOLS, parsePairingCode, validateExternalTool, type ExternalAction, type ExternalApprovalMode, type ExternalApprovalScope, type ExternalState } from "../shared/external-tools";
 
 interface Decision { allow: boolean; scope: ExternalApprovalScope }
 
@@ -28,7 +28,29 @@ const connections = new Map<number, Connection>();
 const MAX_MESSAGE = 100_000;
 
 function publish(s: Connection): void {
+  s.state.revision++;
   void chrome.runtime.sendMessage({ kind: "external_state", tabId: s.state.tabId, external: s.state }).catch(() => {});
+}
+
+function actionDetails(name: string, input: Record<string, unknown>): Pick<ExternalAction, "summary" | "detail"> {
+  const ref = typeof input.ref === "string" ? `Element ${input.ref}` : "This tab";
+  switch (name) {
+    case "snapshot": return { summary: "Read page", detail: "Inspect the page and its controls" };
+    case "screenshot": return { summary: "Take screenshot", detail: input.clip ? "Capture a region of this tab" : "Capture this tab" };
+    case "extractText": return { summary: "Read page text", detail: ref };
+    case "click": return { summary: "Click element", detail: ref };
+    case "hover": return { summary: "Hover over element", detail: ref };
+    case "scroll_to": return { summary: "Scroll to element", detail: ref };
+    case "scroll": return { summary: "Scroll page", detail: `${input.direction ?? "down"}${input.amount == null ? "" : ` · ${input.amount} pixels`}` };
+    case "type": return { summary: input.submit ? "Type and submit" : "Type text", detail: `${ref} · ${(input.text as string).length} characters${input.clearFirst ? " · replace existing text" : ""}` };
+    case "set_text": return { summary: "Replace page text", detail: `${ref} · ${(input.text as string).length} characters` };
+    case "press_key": return { summary: "Press key", detail: "Send a keyboard action to this tab" };
+    case "navigate": {
+      const url = new URL(input.url as string);
+      return { summary: "Navigate to page", detail: `${url.origin}${url.pathname}`.slice(0, 200) };
+    }
+    default: return { summary: "Browser action" };
+  }
 }
 
 function alive(s: Connection): void {
@@ -73,6 +95,9 @@ async function approve(s: Connection, name: string, input: Record<string, unknow
     s.decide = resolve;
     s.state.pending = { id: crypto.randomUUID(), name, input, origin, reason };
     s.state.status = "Waiting for your approval";
+    s.state.phase = "waiting";
+    const action = s.state.actions.at(-1);
+    if (action) action.status = "waiting";
     publish(s);
   });
   s.decide = undefined;
@@ -88,8 +113,19 @@ async function approve(s: Connection, name: string, input: Record<string, unknow
 async function invoke(s: Connection, message: { id: string; name: string; input: unknown }): Promise<void> {
   let content = "";
   let isError = false;
+  const action: ExternalAction = {
+    id: message.id, name: message.name, summary: "Browser action",
+    status: "running", startedAt: Date.now(),
+  };
+  s.state.actionCount++;
+  s.state.actions.push(action);
+  s.state.actions = s.state.actions.slice(-50);
   try {
     const input = validateExternalTool(message.name, message.input);
+    Object.assign(action, actionDetails(message.name, input));
+    s.state.phase = "running";
+    s.state.status = `Running ${message.name}`;
+    publish(s);
     const tool = registry.get(message.name)!;
     const origin = (await page(s)).origin;
     if (origin !== s.approvedOrigin) {
@@ -105,6 +141,8 @@ async function invoke(s: Connection, message: { id: string; name: string; input:
       await approve(s, message.name, input, origin, "Allow this action on the shared tab?");
     }
     s.state.status = `Running ${message.name}`;
+    s.state.phase = "running";
+    action.status = "running";
     publish(s);
     const result = await tool.run({ id: message.id, name: message.name, input }, {
       tabId: s.state.tabId,
@@ -139,8 +177,10 @@ async function invoke(s: Connection, message: { id: string; name: string; input:
   s.state.pending = undefined;
   s.decide = undefined;
   s.state.status = "Connected — give instructions in your agent";
-  s.state.actions.push({ name: message.name, summary: isError ? content.slice(0, 300) : "Completed", error: isError });
-  s.state.actions = s.state.actions.slice(-20);
+  s.state.phase = "ready";
+  action.status = isError ? "error" : "done";
+  action.finishedAt = Date.now();
+  if (isError) action.error = content.slice(0, 300);
   publish(s);
   if (s.ws.readyState === WebSocket.OPEN) s.ws.send(JSON.stringify({ type: "result", id: message.id, content, isError }));
 }
@@ -157,7 +197,11 @@ export const externalAgent = {
     // The background router serializes this with standalone run creation.
     const ws = new WebSocket(`ws://127.0.0.1:${port}/tabagent`);
     const s: Connection = {
-      state: { tabId, connected: true, approvalMode, agent: "Local agent", status: "Connecting…", actions: [] },
+      state: {
+        connectionId: crypto.randomUUID(), revision: 0, connectedAt: Date.now(),
+        tabId, connected: true, phase: "connecting", approvalMode,
+        agent: "Local agent", status: "Connecting…", actionCount: 0, actions: [],
+      },
       ws, controller: new AbortController(), closed: false, attached: false, seen: new Set(),
     };
     connections.set(tabId, s);
@@ -192,6 +236,7 @@ export const externalAgent = {
         } else if (msg.type === "shared" && s.setup && !s.heartbeat) {
           clearTimeout(connectionTimer);
           s.state.status = "Connected — give instructions in your agent";
+          s.state.phase = "ready";
           publish(s);
           s.heartbeat = setInterval(() => {
             if (Date.now() - lastPong > 45_000) { void revoke(s, "Connection lost — tab access revoked"); return; }
@@ -235,6 +280,13 @@ export const externalAgent = {
     s.decide = undefined;
     s.state.pending = undefined;
     s.state.status = "Stopping…";
+    s.state.phase = "stopping";
+    const action = s.state.actions.at(-1);
+    if (action && !action.finishedAt) {
+      action.status = "cancelled";
+      action.finishedAt = Date.now();
+      action.error = "Connection ended. An action already sent to the page may have taken effect.";
+    }
     clearInterval(s.heartbeat);
     s.ws.close();
     publish(s);
@@ -245,6 +297,7 @@ export const externalAgent = {
       connections.delete(tabId);
       s.state.connected = false;
       s.state.status = reason;
+      s.state.phase = "disconnected";
       publish(s);
     })();
     return s.cleanup;

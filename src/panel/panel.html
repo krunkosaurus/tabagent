@@ -56,17 +56,6 @@
         <p id="external-mode-help">Allow for this connection permits actions, form submissions and reading new sites in this tab until you stop sharing.</p>
         <button id="external-connect" type="button">Share this tab</button>
       </div>
-      <p id="external-permissions" hidden></p>
-      <button id="external-stop" type="button" hidden>Stop sharing</button>
-      <div id="external-approval" hidden>
-        <p id="external-reason"></p>
-        <pre id="external-action"></pre>
-        <button id="external-allow" type="button">Allow action</button>
-        <button id="external-allow-connection" type="button" aria-describedby="external-grant-help">Allow for this connection</button>
-        <button id="external-deny" type="button">Deny action</button>
-        <p id="external-grant-help">Allow for this connection permits actions, form submissions and reading new sites in this tab until you stop sharing.</p>
-      </div>
-      <ol id="external-actions" aria-label="Local agent activity"></ol>
     </details>
     <div id="notice" class="notice"></div>
 
@@ -123,8 +112,43 @@
         </div>
       </div>
     </div>
+    <section id="external-activity" class="external-activity" aria-label="Local agent browser activity" hidden>
+      <div class="external-heading">
+        <div class="external-heading-row">
+          <div>
+            <div class="external-eyebrow">Browser activity</div>
+            <h1 id="external-agent-name"></h1>
+          </div>
+          <button id="external-stop" type="button" hidden>Stop sharing</button>
+          <button id="external-back" type="button" hidden>Back to chat</button>
+        </div>
+        <div class="external-phase-row">
+          <span id="external-phase-indicator" aria-hidden="true"></span>
+          <span id="external-phase" role="status"></span>
+        </div>
+        <p id="external-context"></p>
+        <p id="external-permissions" hidden></p>
+        <div id="external-metrics"></div>
+      </div>
+      <div id="external-approval" hidden>
+        <p id="external-reason"></p>
+        <pre id="external-action"></pre>
+        <button id="external-allow" type="button">Allow action</button>
+        <button id="external-allow-connection" type="button" aria-describedby="external-grant-help">Allow for this connection</button>
+        <button id="external-deny" type="button">Deny action</button>
+        <p id="external-grant-help">Allow for this connection permits actions, form submissions and reading new sites in this tab until you stop sharing.</p>
+      </div>
+      <div id="external-activity-scroll">
+        <div id="external-waiting">
+          <div class="external-waiting-icon" aria-hidden="true">↗</div>
+          <h2>No browser actions yet</h2>
+          <p id="external-waiting-help"></p>
+        </div>
+        <ol id="external-actions" aria-label="Browser action history"></ol>
+      </div>
+    </section>
     <div id="messages"></div>
-    <footer>
+    <footer id="chat-composer">
       <div class="composer-wrap">
         <textarea id="composer" dir="auto" placeholder="Ask the agent to do something on this page..." rows="1"></textarea>
         <div class="composer-actions">

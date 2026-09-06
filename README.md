@@ -80,7 +80,7 @@ npm run build
 
 To edit the current connection, click **Edit connection** directly below the
 panel header. The version beside it identifies the loaded build (currently
-**v0.2.1**). To edit another saved provider, open the provider picker and use its
+**v0.2.2**). To edit another saved provider, open the provider picker and use its
 **Edit connection** button. Change the base URL or API key
 and click **Save changes**. An empty key field keeps the existing key when the
 server address is unchanged. For a different address, explicitly enter that
@@ -152,6 +152,14 @@ the client must own the process and its stdin/stdout.
 5. In Ask mode, approve or deny actions in the sidebar. You can also click
    **Allow for this connection** on an approval prompt to continue without
    repeated prompts. **Stop sharing** or the Stop button revokes the connection.
+
+While a local agent is connected, the main panel shows **Browser activity**:
+the current action, approval waits, completed steps, errors and elapsed times.
+It keeps the latest 50 action summaries and restores them when you reopen the
+panel during that connection. If no browser calls arrive, it explicitly says
+it is waiting for the agent. Give tasks and read the agent's conversation in
+Pi, Codex or Hermes; this view shows their browser calls. After sharing ends,
+the open panel keeps the outcome visible until you reconnect or return to chat.
 
 You can share several tabs with one agent by repeating step 3 with its code.
 Codex and Hermes can work on different tabs concurrently. A tab has one owner;

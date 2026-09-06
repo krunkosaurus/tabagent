@@ -91,12 +91,27 @@ export interface ExternalApproval {
   origin: string;
   reason: string;
 }
+export interface ExternalAction {
+  id: string;
+  name: string;
+  summary: string;
+  detail?: string;
+  status: "running" | "waiting" | "done" | "error" | "cancelled";
+  startedAt: number;
+  finishedAt?: number;
+  error?: string;
+}
 export interface ExternalState {
+  connectionId: string;
+  revision: number;
+  connectedAt: number;
   tabId: number;
   connected: boolean;
+  phase: "connecting" | "ready" | "waiting" | "running" | "stopping" | "disconnected";
   approvalMode: ExternalApprovalMode;
   agent: string;
   status: string;
   pending?: ExternalApproval;
-  actions: { name: string; summary: string; error?: boolean }[];
+  actionCount: number;
+  actions: ExternalAction[];
 }

@@ -282,6 +282,7 @@ async function handleEvent(e: PanelEvent): Promise<void> {
       break;
     case "session_state":
       if (e.session.tabId === state.tabId) {
+        if (!externalConnected()) renderExternal(null);
         state.sessionId = e.session.sessionId;
         renderState(e.session.state);
       }

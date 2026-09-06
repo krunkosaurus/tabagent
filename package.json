@@ -1,6 +1,6 @@
 {
   "name": "tabagent",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "description": "Universal AI Browser Agent Chrome Extension (MV3) with Z.AI coding-plan support",
   "scripts": {

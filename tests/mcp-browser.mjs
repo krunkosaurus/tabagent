@@ -17,6 +17,7 @@ const clients = [];
 const errors = [];
 let context;
 let fixture;
+let releaseNavigation;
 let hostileServer;
 let hostileSockets;
 const call = (client, name, args = {}, options) => {
@@ -46,9 +47,11 @@ async function client(name) {
 try {
   fixture = createServer((req, res) => {
     res.setHeader('Content-Type', 'text/html');
-    res.end(`<!doctype html><title>${req.url === '/b' ? 'Tab B' : 'Tab A'}</title><h1>Fixture ${req.url}</h1>
+    const body = `<!doctype html><title>${req.url === '/b' ? 'Tab B' : 'Tab A'}</title><h1>Fixture ${req.url}</h1>
       <label for="name">Name</label><input id="name"><button id="save">Save</button><p id="status">Ready</p>
-      <script>window.__agentRefMap={poisoned:true};document.querySelector('#save').onclick=()=>document.querySelector('#status').textContent='Saved';</script>`);
+      <script>window.__agentRefMap={poisoned:true};document.querySelector('#save').onclick=()=>document.querySelector('#status').textContent='Saved';</script>`;
+    if (req.url.startsWith('/slow-activity')) releaseNavigation = () => res.end(body);
+    else res.end(body);
   });
   await new Promise((r) => fixture.listen(0, '127.0.0.1', r));
   const url = `http://127.0.0.1:${fixture.address().port}`;
@@ -84,8 +87,11 @@ try {
   const hermes = await client('Hermes');
   const codeA = json(await call(codex, 'tabagent_connect')).pairingCode;
   const codeB = json(await call(hermes, 'tabagent_connect')).pairingCode;
-  async function share(t, code, approvalMode = 'ask') {
+  async function openPairing(t) {
     if (!await t.panel.locator('#external-panel').evaluate((node) => node.open)) await t.panel.locator('#external-summary').click();
+  }
+  async function share(t, code, approvalMode = 'ask') {
+    await openPairing(t);
     await t.panel.locator('#external-code').fill(code);
     await t.panel.locator('#external-approval-mode').selectOption(approvalMode);
     await t.panel.locator('#external-connect').click();
@@ -105,6 +111,14 @@ try {
   assert(bounds && bounds.x >= 0 && bounds.x + bounds.width <= 360);
   assert.equal(await a.panel.locator('#external-code').inputValue(), '');
   assert.equal(await a.panel.locator('#composer').isDisabled(), true);
+  await a.panel.locator('#external-activity').waitFor({ state: 'visible' });
+  assert.equal(await a.panel.locator('#messages').isVisible(), false);
+  assert.equal(await a.panel.locator('#chat-composer').isVisible(), false);
+  assert.equal(await a.panel.locator('#provider-chip').isVisible(), false);
+  assert.equal(await a.panel.locator('#external-agent-name').textContent(), 'Codex');
+  assert.match(await a.panel.locator('#external-phase').textContent(), /Waiting for Codex to send a browser action/);
+  assert.equal(await a.panel.locator('#external-waiting').isVisible(), true);
+  assert.equal(await a.panel.locator('#external-actions > li').count(), 0);
   console.log('PASS: actual Chrome pairing, visible supervision at 360px, two-agent isolation and standalone ownership exclusion');
 
   const untrusted = await a.panel.evaluate(async (tabId) => (await chrome.scripting.executeScript({ target: { tabId }, func: async () => {
@@ -115,6 +129,10 @@ try {
   for (const response of Object.values(untrusted)) assert.equal(response.ok, false);
   const snapshot = await call(codex, 'tabagent_snapshot', { tabId: a.tabId });
   assert(!snapshot.isError, JSON.stringify(snapshot));
+  await a.panel.locator('#external-actions [data-tool="snapshot"][data-status="done"]').waitFor();
+  assert.equal(await b.panel.locator('#external-actions > li').count(), 0, 'activity belongs only to its shared tab');
+  assert.equal(await a.panel.locator('#external-waiting').isVisible(), false);
+  assert.match(await a.panel.locator('#external-phase').textContent(), /next browser action/);
   const ref = snapshot.content[0].text.match(/textbox "Name" \[ref=([^\]]+)\]/)?.[1];
   assert(ref, snapshot.content[0].text);
   assert.equal(await a.page.evaluate(() => Object.keys(window.__agentRefMap).join(',')), 'poisoned');
@@ -141,19 +159,32 @@ try {
   const approval = await pending(a);
   assert.equal(approval.input.text, 'Must stay empty');
   assert.equal(await a.page.locator('#name').inputValue(), '');
+  await a.panel.locator('#external-actions [data-tool="type"][data-status="waiting"]').waitFor();
+  assert.equal(await a.panel.locator('#external-phase').textContent(), 'Waiting for your approval');
+  assert(!(await a.panel.locator('#external-actions').textContent()).includes('Must stay empty'), 'history does not echo typed values');
   assert.equal((await b.send({ kind: 'external_decision', id: approval.id, allow: true })).ok, false);
   await a.panel.locator('#external-deny').click();
   assert.equal((await denied).isError, true);
+  await a.panel.locator('#external-actions [data-status="error"]').waitFor();
+  assert((await a.panel.locator('#external-actions .external-error').textContent()).includes('Denied by user'));
   assert.equal(await a.page.locator('#name').inputValue(), '');
 
   const typed = call(codex, 'tabagent_type', { tabId: a.tabId, ref, text: 'Approved value' });
   await pending(a);
   await a.panel.reload();
   await a.panel.locator('#external-allow').waitFor({ state: 'visible' });
+  assert.equal(await a.panel.locator('#external-actions > li').count(), 4, 'prior activity and the pending action restore on reopen');
+  assert.equal(await a.panel.locator('#messages').isVisible(), false);
   assert((await a.panel.locator('#external-action').textContent()).includes('Approved value'));
   await a.panel.locator('#external-allow').click();
   assert(!(await typed).isError);
   assert.equal(await a.page.locator('#name').inputValue(), 'Approved value');
+  const completed = (await a.send({ kind: 'get_state' })).data.external.actions.at(-1);
+  assert.equal(completed.status, 'done');
+  assert(completed.finishedAt >= completed.startedAt);
+  assert(!JSON.stringify(completed).includes('Approved value'));
+  assert(!JSON.stringify(completed).includes('data:image/'));
+  console.log('PASS: main activity view replaces the chat greeting and shows waiting, completed, failed and restored actions without typed values');
   console.log('PASS: external actions require approval even in Auto mode; wrong-tab decisions fail; pending approvals survive panel recreation');
 
   const changed = call(codex, 'tabagent_type', { tabId: a.tabId, ref, text: 'Must not follow navigation' });
@@ -191,6 +222,13 @@ try {
   await a.panel.locator('#external-stop').click();
   assert.equal((await stopped).isError, true);
   await until(async () => !(await a.send({ kind: 'get_state' })).data.external, 'ownership released');
+  await a.panel.locator('#external-actions [data-status="cancelled"]').waitFor();
+  assert.equal(await a.panel.locator('#external-phase').textContent(), 'Sharing ended');
+  assert.equal(await a.panel.locator('#external-stop').isVisible(), false);
+  await a.panel.locator('#external-back').click();
+  assert.equal(await a.panel.locator('#external-activity').isVisible(), false);
+  assert.equal(await a.panel.locator('#messages').isVisible(), true);
+  assert.equal(await a.panel.locator('#chat-composer').isVisible(), true);
   assert.equal((await a.send({ kind: 'external_decision', id: expired.id, allow: true })).ok, false);
   assert.equal(await a.page.locator('#name').inputValue(), '');
   assert.deepEqual(json(await call(codex, 'tabagent_tabs')).tabs, []);
@@ -203,6 +241,7 @@ try {
   console.log('PASS: navigation always asks; Stop cancels pending writes and approvals without disturbing another agent');
 
   // Pair again on the new site, then exercise MCP cancellation and Chrome's stop.
+  await openPairing(a);
   await a.panel.locator('#external-code').fill(codeA);
   await a.panel.locator('#external-connect').click();
   await until(async () => json(await call(codex, 'tabagent_tabs')).tabs.length, 're-pair');
@@ -266,6 +305,21 @@ try {
   const saveRef = grantedSnapshot.content[0].text.match(/button "Save" \[ref=([^\]]+)\]/)[1];
   await automatic('tabagent_click', { ref: saveRef });
   assert.equal(await a.page.locator('#status').textContent(), 'Saved');
+  const liveNavigation = call(codex, 'tabagent_navigate', { tabId: a.tabId, url: url + '/slow-activity?token=private-query#private-fragment' });
+  await until(() => releaseNavigation, 'navigation request received');
+  await a.panel.locator('#external-activity[data-phase="running"]').waitFor();
+  const liveRow = a.panel.locator('#external-actions [data-tool="navigate"][data-status="running"]');
+  await liveRow.waitFor();
+  assert.equal(await liveRow.locator('strong').textContent(), 'Navigate to page');
+  assert(!(await liveRow.textContent()).includes('private-query'));
+  assert(!(await liveRow.textContent()).includes('private-fragment'));
+  assert.equal(await a.panel.locator('#external-stop').isVisible(), true);
+  await a.panel.reload();
+  await a.panel.locator('#external-activity[data-phase="running"]').waitFor();
+  releaseNavigation();
+  assert(!(await liveNavigation).isError);
+  await a.panel.locator('#external-actions [data-tool="navigate"][data-status="done"]').waitFor();
+  console.log('PASS: real in-flight navigation shows progress and restores while running; activity omits URL queries and fragments');
   await automatic('tabagent_navigate', { url: otherOrigin + '/trusted-destination' });
   await a.page.waitForURL(otherOrigin + '/trusted-destination');
   assert((await automatic('tabagent_snapshot', {})).content[0].text.includes('Fixture /trusted-destination'));
@@ -286,6 +340,7 @@ try {
   assert.equal((await call(codex, 'tabagent_snapshot', { tabId: a.tabId })).isError, true);
   assert.deepEqual(json(await call(codex, 'tabagent_tabs')).tabs.map((tab) => tab.tabId), [b.tabId]);
   // Re-pair without selecting a mode: the previous grant must be gone.
+  await openPairing(a);
   await a.panel.locator('#external-code').fill(codeA);
   await a.panel.locator('#external-connect').click();
   await until(async () => (await a.send({ kind: 'get_state' })).data.external?.status.startsWith('Connected'), 'default re-pair');
@@ -297,6 +352,7 @@ try {
   await a.panel.locator('#external-stop').click();
   await until(async () => !(await a.send({ kind: 'get_state' })).data.external, 'default connection stopped');
   await share(a, codeA, 'connection');
+  assert.equal(await a.panel.locator('#external-actions > li').count(), 0, 'new connections start a fresh activity history');
   await automatic('tabagent_scroll', { direction: 'down' });
   await worker.evaluate((tabId) => chrome.debugger.detach({ tabId }), a.tabId);
   assert.equal((await call(codex, 'tabagent_snapshot', { tabId: a.tabId })).isError, true);
@@ -320,10 +376,12 @@ try {
   });
   await new Promise((r) => hostileServer.listen(0, '127.0.0.1', r));
   const hostileCode = `tabagent:${hostileServer.address().port}:${'a'.repeat(64)}`;
+  await openPairing(b);
   await b.panel.locator('#external-code').fill(hostileCode);
   await b.panel.locator('#external-connect').click();
   await until(async () => (await b.send({ kind: 'get_state' })).data.external?.status.startsWith('Connected'), 'hostile companion paired');
   assert.equal(await b.panel.locator('#injected').count(), 0);
+  assert.equal(await b.panel.locator('#external-agent-name').textContent(), '<img id="injected" src="x">');
   const forgedRequest = once(peer, 'message');
   peer.send(JSON.stringify({ type: 'invoke', id: randomUUID(), name: 'scroll', input: { direction: 'down' }, approvalMode: 'connection' }));
   await pending(b);

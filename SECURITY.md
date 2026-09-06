@@ -26,7 +26,7 @@ certification, a comprehensive penetration test, or an evaluation of model quali
 
 ## Data flows and remaining risks
 
-### External MCP agents (v0.2.1)
+### External MCP agents (v0.2.2)
 
 Local Codex/Hermes/Pi sessions can use an authenticated companion to control
 explicitly shared tabs. Each process has an ephemeral loopback socket and random
@@ -49,6 +49,12 @@ permission to read the initial site in Ask mode; each subsequently visited
 origin asks again. Connection approval covers subsequent sites in the shared
 tab as well. In both modes, tab listings expose only the metadata explicitly
 shared initially, and origin changes during an action still discard its result.
+
+The activity view keeps at most 50 action summaries and timings in connection
+memory. Normal summaries omit entered text, keyboard values, URL query strings,
+fragments and screenshot bytes; failures show a bounded error message. Agent
+names and activity fields render as text. The panel reports actual browser
+calls and distinguishes idle connections from running tools.
 
 ### Standalone mode
 

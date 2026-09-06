@@ -81,14 +81,27 @@ return an error with a request to capture a smaller region. Screenshots are MCP
 image blocks, not a base64 text dump. The extension and companion keep external
 session data in memory. Receiving agents may persist results or image caches.
 
+The main extension panel displays the connection's live browser activity, with
+running/waiting/completed/error/interrupted states and elapsed times. The last
+50 summaries stay in memory for the live connection and survive panel
+recreation. Normal summaries omit entered text, keyboard values, URL queries
+and fragments, and screenshot bytes. Errors retain the existing bounded error
+message. This reports browser tool calls, not the external agent's conversation
+or model inference; an idle connection is labeled as waiting for an action.
+Connection revisions prevent buffered events from overwriting newer restored
+activity. Stopping interrupts the current row and leaves the outcome visible
+in the open panel; a new connection starts a fresh history.
+
 `npm test` covers real MCP discovery/stdio, session isolation, argument rejection,
 origin/Host/token rejection, response spoofing, image encoding and cancellation.
 `npm run test:browser` additionally drives real Chrome extension APIs and CDP:
 pairing, two agents/tabs, standalone ownership exclusion, content-script attacks,
 isolated snapshots, decodable images, approval restoration, denial, wrong-tab
 decisions, changed-origin reads, connection approval at pairing and mid-session,
-grant isolation/reset, Stop, MCP cancellation and debugger loss. The
-original standalone regression suite runs as well. CI grants localhost host
+grant isolation/reset, Stop, MCP cancellation and debugger loss. Activity checks
+cover idle, approval, completion, errors, interruption and restoration while a
+real navigation is still running. The original standalone regression suite
+runs as well. CI grants localhost host
 access only to a copied test extension and uses disposable browser profiles.
 
 `tests/mcp-python.py` is an optional protocol smoke test for the Python MCP SDK.

@@ -2208,7 +2208,62 @@ footer:has(.composer-wrap.busy) .composer-hint::after {
 .external-panel input, .external-panel select { box-sizing: border-box; width: 100%; padding: 8px; margin-top: 5px; background: var(--bg); color: inherit; border: 1px solid var(--border, #555); border-radius: 5px; }
 .external-panel button { padding: 6px 10px; margin: 4px 4px 0 0; cursor: pointer; }
 .external-panel [hidden] { display: none !important; }
-#external-approval { border-top: 1px solid var(--border, #555); margin-top: 10px; }
-#external-action { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow: auto; font-size: 11px; }
-#external-actions { padding-left: 20px; max-height: 100px; overflow: auto; overflow-wrap: anywhere; }
 .external-error { color: var(--error, #d97676); }
+
+/* The connected agent owns the main view; its chat remains in its own client. */
+.external-panel[hidden], .external-activity[hidden], .external-activity [hidden],
+#messages[hidden], #chat-composer[hidden] { display: none !important; }
+#chat.external-view #provider-chip,
+#chat.external-view #model-select,
+#chat.external-view #session-state,
+#chat.external-view #edit-connection,
+#chat.external-view #memory-btn,
+#chat.external-view #export-btn,
+#chat.external-view #expand-all-btn,
+#chat.external-view #notify-btn { display: none; }
+#chat.external-view .brand { margin-right: auto; }
+#chat.external-view .connection-toolbar { justify-content: flex-end; }
+.external-activity { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.external-heading { flex-shrink: 0; padding: 14px 18px 16px; border-bottom: 1px solid var(--border); }
+.external-heading-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.external-heading-row > div { min-width: 0; }
+.external-eyebrow { font-size: 11px; color: var(--fg-muted); margin-bottom: 4px; }
+#external-agent-name { font-size: 20px; line-height: 1.25; margin: 0; overflow-wrap: anywhere; }
+.external-activity button { background: var(--bg-elev); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+.external-activity button:hover { background: var(--bg-hover); border-color: var(--fg-muted); }
+#external-stop { flex-shrink: 0; color: var(--error, #d97676); }
+.external-phase-row { display: flex; align-items: center; gap: 8px; margin-top: 18px; font-size: 13px; line-height: 1.5; font-weight: 600; }
+#external-phase-indicator { box-sizing: border-box; flex-shrink: 0; width: 9px; height: 9px; border-radius: 50%; background: var(--fg-muted); }
+.external-activity[data-phase="running"] #external-phase-indicator,
+.external-activity[data-phase="connecting"] #external-phase-indicator { width: 12px; height: 12px; background: transparent; border: 2px solid var(--border); border-top-color: var(--accent); animation: external-spin 1s linear infinite; }
+.external-activity[data-phase="waiting"] #external-phase-indicator { background: var(--accent); }
+.external-activity[data-phase="ready"][data-last-status="error"] #external-phase-indicator { background: var(--error, #d97676); }
+#external-context, #external-permissions { font-size: 12px; line-height: 1.5; color: var(--fg-secondary); margin: 9px 0 0; overflow-wrap: anywhere; }
+#external-permissions { font-size: 11px; color: var(--fg-muted); }
+#external-metrics { margin-top: 12px; font-size: 11px; line-height: 1.5; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+#external-approval { flex-shrink: 0; margin: 12px 14px 0; padding: 12px; border: 1px solid var(--accent); border-radius: 8px; background: var(--bg-elev); max-height: 40vh; overflow: auto; }
+#external-reason { margin: 0 0 8px; font-size: 13px; line-height: 1.5; }
+#external-action { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 120px; overflow: auto; font-size: 11px; color: var(--fg-secondary); }
+#external-approval button { margin: 4px 4px 0 0; }
+#external-grant-help { margin: 8px 0 0; font-size: 11px; line-height: 1.5; color: var(--fg-muted); }
+#external-activity-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 14px 24px; scrollbar-width: thin; scrollbar-color: var(--scrollbar) transparent; }
+#external-waiting { padding: 24px 14px; text-align: center; color: var(--fg-secondary); }
+.external-waiting-icon { margin: 0 auto 15px; width: 40px; height: 40px; border-radius: 12px; background: var(--bg-elev); color: var(--accent); display: grid; place-items: center; font-size: 24px; }
+#external-waiting h2 { margin: 0 0 8px; font-size: 14px; font-weight: 600; color: var(--fg); }
+#external-waiting p { margin: 0; font-size: 12px; line-height: 1.7; }
+#external-actions { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 10px; }
+.external-action-row { flex-shrink: 0; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-elev); overflow-wrap: anywhere; }
+.external-action-row[data-status="running"], .external-action-row[data-status="waiting"] { border-color: var(--accent); }
+.external-action-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: 13px; line-height: 1.5; }
+.external-action-heading strong { font-weight: 600; }
+.external-action-badge { flex-shrink: 0; font-size: 10px; color: var(--fg-muted); }
+.external-action-row[data-status="running"] .external-action-badge,
+.external-action-row[data-status="waiting"] .external-action-badge { color: var(--accent); }
+.external-action-row[data-status="error"] .external-action-badge { color: var(--error, #d97676); }
+.external-action-detail, .external-action-row .external-error { margin: 6px 0 0; font-size: 12px; line-height: 1.5; }
+.external-action-detail { color: var(--fg-secondary); }
+.external-action-time { display: block; margin-top: 9px; color: var(--fg-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+@keyframes external-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .external-activity #external-phase-indicator { animation: none !important; }
+}

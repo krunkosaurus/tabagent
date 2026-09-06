@@ -64,6 +64,12 @@ labels, not independently verified identities. Page DOM can change after a
 check; origin checks do not authenticate page content or undo dispatched input.
 Dialog confirmations are dismissed, never automatically accepted.
 
+Isolation follows the **MCP process/connection**, not a conversation name supplied
+by the caller. If a client or gateway reuses one MCP server across conversations,
+those conversations share its paired tabs. Use separate client processes/profiles
+for independent agents and Stop sharing when finished; closing a conversation
+alone may not terminate its host's MCP process.
+
 The server bounds messages, active sockets, per-tab concurrency and tool wait
 time; the extension bounds requests, parameters and result sizes. Huge images
 return an error with a request to capture a smaller region. Screenshots are MCP

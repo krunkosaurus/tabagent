@@ -154,6 +154,9 @@ the client must own the process and its stdin/stdout.
 You can share several tabs with one agent by repeating step 3 with its code.
 Codex and Hermes can work on different tabs concurrently. A tab has one owner;
 stop sharing before giving it to another agent or using TabAgent's own chat.
+Isolation follows the MCP connection: a client that reuses one companion across
+conversations also shares its paired tabs across them. Use separate client
+processes/profiles when you need independent ownership.
 Keep pairing codes in your agent conversation and the extension UI, never in
 webpage content. Restarting the agent, reloading the extension, closing the tab,
 or stopping its debugger requires pairing again. Connections do not auto-resume.

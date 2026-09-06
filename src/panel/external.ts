@@ -1,4 +1,4 @@
-import { parsePairingCode, type ExternalState } from "../shared/external-tools";
+import { parsePairingCode, type ExternalApprovalMode, type ExternalState } from "../shared/external-tools";
 import type { PanelRequest } from "../shared/protocol";
 
 const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -6,10 +6,18 @@ let current: ExternalState | null = null;
 export function externalConnected(): boolean { return !!current?.connected; }
 
 export function renderExternal(state: ExternalState | null): void {
+  const wasConnected = externalConnected();
   current = state;
   const connected = externalConnected();
   el("external-form").hidden = connected;
   el("external-stop").hidden = !connected;
+  el("external-permissions").hidden = !connected;
+  el("external-permissions").textContent = state?.approvalMode === "connection"
+    ? "Allowed for this connection: actions and new sites in this tab. Stop sharing to revoke access."
+    : "Ask before each action and before reading a new site.";
+  const mode = el<HTMLSelectElement>("external-approval-mode");
+  if (connected) mode.value = state!.approvalMode;
+  else if (wasConnected) mode.value = "ask";
   el("external-status").textContent = state ? `${state.agent}: ${state.status}` : "Ask Codex or Hermes to connect to TabAgent, then paste its pairing code here.";
   el("external-summary").textContent = connected ? `Local agent · ${state!.agent}` : "Local agent";
   if (connected) el<HTMLDetailsElement>("external-panel").open = true;
@@ -37,13 +45,14 @@ export function initExternal(send: (request: PanelRequest) => Promise<unknown>):
   el("external-connect").addEventListener("click", () => {
     const input = el<HTMLInputElement>("external-code");
     const code = input.value.trim();
+    const approvalMode = el<HTMLSelectElement>("external-approval-mode").value as ExternalApprovalMode;
     try { parsePairingCode(code); } catch (e) { error(e); return; }
     const button = el<HTMLButtonElement>("external-connect");
     button.disabled = true;
     // Chrome requires this call inside the click's user gesture.
     void chrome.permissions.request({ origins: ["http://127.0.0.1/*"] }).then(async (allowed) => {
       if (!allowed) throw new Error("Local connection permission was denied.");
-      await send({ kind: "external_connect", code });
+      await send({ kind: "external_connect", code, approvalMode });
       input.value = ""; // pairing secret is never stored
     }).catch(error).finally(() => { button.disabled = false; });
   });
@@ -54,4 +63,8 @@ export function initExternal(send: (request: PanelRequest) => Promise<unknown>):
       if (pending) void send({ kind: "external_decision", id: pending.id, allow }).catch(error);
     });
   }
+  el("external-allow-connection").addEventListener("click", () => {
+    const pending = current?.pending;
+    if (pending) void send({ kind: "external_decision", id: pending.id, allow: true, scope: "connection" }).catch(error);
+  });
 }

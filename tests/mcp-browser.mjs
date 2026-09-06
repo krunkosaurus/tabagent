@@ -19,7 +19,13 @@ let context;
 let fixture;
 let hostileServer;
 let hostileSockets;
-const call = (client, name, args = {}, options) => client.callTool({ name, arguments: args }, undefined, options);
+const call = (client, name, args = {}, options) => {
+  const result = client.callTool({ name, arguments: args }, undefined, options);
+  // A failed assertion can close clients while a call awaits a sidebar choice.
+  // Keep that cleanup rejection from hiding the original test failure.
+  void result.catch(() => {});
+  return result;
+};
 const json = (result) => JSON.parse(result.content[0].text);
 async function until(fn, label) {
   const deadline = Date.now() + 15_000;
@@ -78,14 +84,17 @@ try {
   const hermes = await client('Hermes');
   const codeA = json(await call(codex, 'tabagent_connect')).pairingCode;
   const codeB = json(await call(hermes, 'tabagent_connect')).pairingCode;
-  async function share(t, code) {
-    await t.panel.locator('#external-summary').click();
+  async function share(t, code, approvalMode = 'ask') {
+    if (!await t.panel.locator('#external-panel').evaluate((node) => node.open)) await t.panel.locator('#external-summary').click();
     await t.panel.locator('#external-code').fill(code);
+    await t.panel.locator('#external-approval-mode').selectOption(approvalMode);
     await t.panel.locator('#external-connect').click();
     await until(async () => (await t.send({ kind: 'get_state' })).data.external?.status.startsWith('Connected'), 'tab paired');
   }
+  assert.equal((await a.send({ kind: 'external_connect', code: codeA, approvalMode: 'forever' })).ok, false);
   await share(a, codeA);
   await share(b, codeB);
+  assert.equal((await a.send({ kind: 'get_state' })).data.external.approvalMode, 'ask');
   assert.deepEqual(json(await call(codex, 'tabagent_tabs')).tabs.map((t) => t.tabId), [a.tabId]);
   assert.deepEqual(json(await call(hermes, 'tabagent_tabs')).tabs.map((t) => t.tabId), [b.tabId]);
   assert.equal((await call(hermes, 'tabagent_snapshot', { tabId: a.tabId })).isError, true);
@@ -100,7 +109,7 @@ try {
 
   const untrusted = await a.panel.evaluate(async (tabId) => (await chrome.scripting.executeScript({ target: { tabId }, func: async () => {
     const result = {};
-    for (const kind of ['external_connect', 'external_stop', 'external_decision']) result[kind] = await chrome.runtime.sendMessage({ kind, code: 'x', id: 'x', allow: true });
+    for (const kind of ['external_connect', 'external_stop', 'external_decision']) result[kind] = await chrome.runtime.sendMessage({ kind, code: 'x', id: 'x', allow: true, approvalMode: 'connection', scope: 'connection' });
     return result;
   } }))[0].result, a.tabId);
   for (const response of Object.values(untrusted)) assert.equal(response.ok, false);
@@ -150,8 +159,9 @@ try {
   const changed = call(codex, 'tabagent_type', { tabId: a.tabId, ref, text: 'Must not follow navigation' });
   await pending(a);
   await a.page.goto(otherOrigin + '/private');
-  await a.panel.locator('#external-allow').click();
+  await a.panel.locator('#external-allow-connection').click();
   assert.equal((await changed).isError, true);
+  assert.equal((await a.send({ kind: 'get_state' })).data.external.approvalMode, 'ask', 'a changed-origin decision cannot grant connection access');
   assert.equal(await a.page.locator('#name').inputValue(), '');
   const readPrivate = call(codex, 'tabagent_snapshot', { tabId: a.tabId });
   const access = await pending(a);
@@ -223,6 +233,78 @@ try {
   assert.equal((await b.send({ kind: 'get_state' })).data.external, null);
   console.log('PASS: accepted navigation and a rapid Share/Stop race follow user intent');
 
+  // A tab-bound user decision can authorize the rest of this connection.
+  // No model/client parameter, stored Auto preference or other tab can do so.
+  await a.page.goto(url + '/grant');
+  await share(a, codeA);
+  const grantedSnapshot = await call(codex, 'tabagent_snapshot', { tabId: a.tabId });
+  const grantedRef = grantedSnapshot.content[0].text.match(/textbox "Name" \[ref=([^\]]+)\]/)[1];
+  const grantCall = call(codex, 'tabagent_type', { tabId: a.tabId, ref: grantedRef, text: 'Allowed connection' });
+  const grant = await pending(a);
+  assert.equal((await a.send({ kind: 'external_decision', id: grant.id, allow: true, scope: 'forever' })).ok, false);
+  assert.equal((await a.send({ kind: 'external_decision', id: grant.id, allow: false, scope: 'connection' })).ok, false);
+  assert.equal((await b.send({ kind: 'external_decision', id: grant.id, allow: true, scope: 'connection' })).ok, false);
+  const forged = await a.panel.evaluate(async ({ tabId, id }) => (await chrome.scripting.executeScript({ target: { tabId }, args: [id], func: async (id) =>
+    chrome.runtime.sendMessage({ kind: 'external_decision', id, allow: true, scope: 'connection' }),
+  }))[0].result, { tabId: a.tabId, id: grant.id });
+  assert.equal(forged.ok, false);
+  assert.equal(await a.page.locator('#name').inputValue(), '');
+  await a.panel.locator('#external-allow-connection').click();
+  assert(!(await grantCall).isError);
+  assert.equal(await a.page.locator('#name').inputValue(), 'Allowed connection');
+  await a.panel.reload();
+  await until(() => a.panel.locator('#external-permissions').textContent().then((text) => text.includes('Allowed for this connection')), 'connection grant restored in panel');
+  async function automatic(name, args) {
+    const result = await call(codex, name, { tabId: a.tabId, ...args }, { timeout: 5000 });
+    assert(!result.isError, JSON.stringify(result));
+    const state = (await a.send({ kind: 'get_state' })).data.external;
+    assert.equal(state.approvalMode, 'connection');
+    assert.equal(state.pending, undefined);
+    return result;
+  }
+  await automatic('tabagent_type', { ref: grantedRef, text: 'No repeated prompt', clearFirst: true });
+  const saveRef = grantedSnapshot.content[0].text.match(/button "Save" \[ref=([^\]]+)\]/)[1];
+  await automatic('tabagent_click', { ref: saveRef });
+  assert.equal(await a.page.locator('#status').textContent(), 'Saved');
+  await automatic('tabagent_navigate', { url: otherOrigin + '/trusted-destination' });
+  await a.page.waitForURL(otherOrigin + '/trusted-destination');
+  assert((await automatic('tabagent_snapshot', {})).content[0].text.includes('Fixture /trusted-destination'));
+  const grantsOnDisk = await worker.evaluate(async () => ({ local: await chrome.storage.local.get(null), session: await chrome.storage.session.get(null) }));
+  assert(!JSON.stringify(grantsOnDisk).includes('"approvalMode":"connection"'), 'connection approval is not persisted');
+  console.log('PASS: one explicit grant permits repeated actions, navigation and new-origin reads; content scripts and other panels cannot grant it');
+
+  // The same MCP process can own another tab without inheriting this grant.
+  await share(b, codeA);
+  const otherWrite = call(codex, 'tabagent_scroll', { tabId: b.tabId, direction: 'down' });
+  await pending(b);
+  assert.equal((await b.send({ kind: 'get_state' })).data.external.approvalMode, 'ask');
+  await b.panel.locator('#external-deny').click();
+  assert.equal((await otherWrite).isError, true);
+  await a.panel.locator('#external-stop').click();
+  await until(async () => !(await a.send({ kind: 'get_state' })).data.external, 'granted connection stopped');
+  assert.equal(await a.panel.locator('#external-approval-mode').inputValue(), 'ask');
+  assert.equal((await call(codex, 'tabagent_snapshot', { tabId: a.tabId })).isError, true);
+  assert.deepEqual(json(await call(codex, 'tabagent_tabs')).tabs.map((tab) => tab.tabId), [b.tabId]);
+  // Re-pair without selecting a mode: the previous grant must be gone.
+  await a.panel.locator('#external-code').fill(codeA);
+  await a.panel.locator('#external-connect').click();
+  await until(async () => (await a.send({ kind: 'get_state' })).data.external?.status.startsWith('Connected'), 'default re-pair');
+  assert.equal((await a.send({ kind: 'external_decision', id: grant.id, allow: true, scope: 'connection' })).ok, false);
+  const askAgain = call(codex, 'tabagent_scroll', { tabId: a.tabId, direction: 'down' });
+  await pending(a);
+  await a.panel.locator('#external-deny').click();
+  assert.equal((await askAgain).isError, true);
+  await a.panel.locator('#external-stop').click();
+  await until(async () => !(await a.send({ kind: 'get_state' })).data.external, 'default connection stopped');
+  await share(a, codeA, 'connection');
+  await automatic('tabagent_scroll', { direction: 'down' });
+  await worker.evaluate((tabId) => chrome.debugger.detach({ tabId }), a.tabId);
+  assert.equal((await call(codex, 'tabagent_snapshot', { tabId: a.tabId })).isError, true);
+  await until(async () => !(await a.send({ kind: 'get_state' })).data.external, 'granted connection debugger stop');
+  await b.panel.locator('#external-stop').click();
+  await until(async () => !(await b.send({ kind: 'get_state' })).data.external, 'other tab stopped');
+  console.log('PASS: connection grants stay on their tab, reset after Stop/re-pair, can be chosen at pairing and end on debugger loss');
+
   // A buggy/hostile companion is still subject to the extension's whitelist.
   hostileServer = createServer();
   hostileSockets = new WebSocketServer({ server: hostileServer });
@@ -231,7 +313,7 @@ try {
     peer = ws;
     ws.on('message', (raw) => {
       const message = JSON.parse(raw);
-      if (message.type === 'auth') ws.send(JSON.stringify({ type: 'ready', agent: '<img id="injected" src="x">' }));
+      if (message.type === 'auth') ws.send(JSON.stringify({ type: 'ready', agent: '<img id="injected" src="x">', approvalMode: 'connection' }));
       if (message.type === 'share') ws.send('{"type":"shared"}');
       if (message.type === 'ping') ws.send('{"type":"pong"}');
     });
@@ -242,6 +324,13 @@ try {
   await b.panel.locator('#external-connect').click();
   await until(async () => (await b.send({ kind: 'get_state' })).data.external?.status.startsWith('Connected'), 'hostile companion paired');
   assert.equal(await b.panel.locator('#injected').count(), 0);
+  const forgedRequest = once(peer, 'message');
+  peer.send(JSON.stringify({ type: 'invoke', id: randomUUID(), name: 'scroll', input: { direction: 'down' }, approvalMode: 'connection' }));
+  await pending(b);
+  assert.equal((await b.send({ kind: 'get_state' })).data.external.approvalMode, 'ask', 'companion cannot set its own approval mode');
+  await b.panel.locator('#external-allow-connection').click();
+  assert.equal(JSON.parse((await forgedRequest)[0]).isError, false);
+  assert.equal((await b.send({ kind: 'get_state' })).data.external.approvalMode, 'connection');
   let lastId;
   for (const [name, input] of [['evaluate', { expression: 'window.pwned=true' }], ['navigate', { url: 'javascript:alert(1)' }], ['snapshot', { expression: '1' }]]) {
     lastId = randomUUID();

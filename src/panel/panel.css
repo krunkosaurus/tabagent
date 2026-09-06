@@ -2205,7 +2205,7 @@ footer:has(.composer-wrap.busy) .composer-hint::after {
 .external-panel { margin: 0 12px 8px; padding: 10px; border: 1px solid var(--border, #555); border-radius: 8px; font-size: 12px; flex-shrink: 0; max-height: 55vh; overflow: auto; }
 .external-panel summary { cursor: pointer; font-weight: 600; }
 .external-panel p { margin: 8px 0; line-height: 1.45; overflow-wrap: anywhere; }
-.external-panel input { box-sizing: border-box; width: 100%; padding: 8px; margin-top: 5px; background: transparent; color: inherit; border: 1px solid var(--border, #555); border-radius: 5px; }
+.external-panel input, .external-panel select { box-sizing: border-box; width: 100%; padding: 8px; margin-top: 5px; background: var(--bg); color: inherit; border: 1px solid var(--border, #555); border-radius: 5px; }
 .external-panel button { padding: 6px 10px; margin: 4px 4px 0 0; cursor: pointer; }
 .external-panel [hidden] { display: none !important; }
 #external-approval { border-top: 1px solid var(--border, #555); margin-top: 10px; }

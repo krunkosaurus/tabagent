@@ -13,16 +13,16 @@
 
 import type { Model, PlanStep, ProviderDefinition, QueuedMessage, Session, SessionState, StreamPart, SuggestedAction } from "../core/types";
 import type { UserFact, UserFactCategory } from "../core/storage";
-import type { ExternalState } from "./external-tools";
+import type { ExternalApprovalMode, ExternalApprovalScope, ExternalState } from "./external-tools";
 
 // ---------------------------------------------------------------------------
 // side panel -> SW
 // ---------------------------------------------------------------------------
 
 export type PanelRequest =
-  | { kind: "external_connect"; code: string }
+  | { kind: "external_connect"; code: string; approvalMode?: ExternalApprovalMode }
   | { kind: "external_stop" }
-  | { kind: "external_decision"; id: string; allow: boolean }
+  | { kind: "external_decision"; id: string; allow: boolean; scope?: ExternalApprovalScope }
   | { kind: "connect_provider"; providerId: string; credentials: Record<string, string>; keepSavedKey?: boolean }
   | { kind: "get_provider_connection"; providerId: string }
   | { kind: "validate_token"; providerId: string; credentials: Record<string, string> }

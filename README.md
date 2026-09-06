@@ -47,7 +47,7 @@ https://github.com/user-attachments/assets/2adfd956-d6e8-4b5c-893d-dc04f92abe66
 
 ## Features
 
-- **Local-agent MCP bridge** — pair Codex or Hermes from the sidebar, share specific tabs, and approve actions there. Each session sees only its shared tabs; Stop revokes access. See [local agents](#local-agents-codex-hermes-and-mcp).
+- **Local-agent MCP bridge** — pair Codex, Hermes or Pi from the sidebar, share specific tabs, and choose to approve each action or allow the connection once. Each session sees only its shared tabs; Stop revokes access. See [local agents](#local-agents-codex-hermes-and-mcp).
 - **Any OpenAI-compatible provider** — Z.AI, Zhipu/BigModel, OpenAI, OpenRouter, DeepSeek, Groq, xAI (Grok), Mistral, Fireworks, Cerebras, Moonshot (Kimi), Hugging Face, or any custom endpoint (Ollama, LM Studio, …) through a single adapter
 - **11 CDP browser tools** — snapshot, click, type, scroll, hover, key presses, screenshots, text extraction, and more (see [Browser tools](#browser-tools))
 - **Resumable agent loop** — memory-only checkpoints survive service-worker restarts; conversations are cleared when Chrome exits
@@ -80,7 +80,7 @@ npm run build
 
 To edit the current connection, click **Edit connection** directly below the
 panel header. The version beside it identifies the loaded build (currently
-**v0.2.0**). To edit another saved provider, open the provider picker and use its
+**v0.2.1**). To edit another saved provider, open the provider picker and use its
 **Edit connection** button. Change the base URL or API key
 and click **Save changes**. An empty key field keeps the existing key when the
 server address is unchanged. For a different address, explicitly enter that
@@ -145,11 +145,13 @@ the client must own the process and its stdin/stdout.
 1. Tell your agent: **“Use TabAgent to inspect my browser tab.”**
 2. The agent calls `tabagent_connect` and gives you a session-only pairing code.
 3. Open TabAgent on the intended HTTP(S) page. Expand **Local agent**, paste the
-   code, and click **Share this tab**. Accept Chrome's local connection permission.
+   code, and choose **Ask before each action** or **Allow for this connection**.
+   Click **Share this tab** and accept Chrome's local connection permission.
 4. Give the task in Codex or Hermes. The agent lists shared tabs with
    `tabagent_tabs`, then uses `tabagent_snapshot` and the other browser tools.
-5. Approve or deny actions in the sidebar. **Stop sharing** or the Stop button
-   revokes the connection, including pending approvals.
+5. In Ask mode, approve or deny actions in the sidebar. You can also click
+   **Allow for this connection** on an approval prompt to continue without
+   repeated prompts. **Stop sharing** or the Stop button revokes the connection.
 
 You can share several tabs with one agent by repeating step 3 with its code.
 Codex and Hermes can work on different tabs concurrently. A tab has one owner;
@@ -161,11 +163,14 @@ Keep pairing codes in your agent conversation and the extension UI, never in
 webpage content. Restarting the agent, reloading the extension, closing the tab,
 or stopping its debugger requires pairing again. Connections do not auto-resume.
 
-External agents **always ask before page mutations and navigation**, regardless
-of standalone Auto mode or saved site grants. Sharing initially authorizes reads
-of that origin; a new origin asks again before page content is returned. An
-unanswered tool call expires after 90 seconds and revokes that tab's access.
-Already-dispatched browser actions cannot be undone by Stop.
+External connections default to **Ask before each action**: mutations,
+navigation and reading new origins require sidebar approval. **Allow for this
+connection** permits those actions, including form submissions and reading new
+sites, on this shared tab without further prompts. It lasts only for that tab's
+current connection, survives reopening the panel, and ends when sharing stops.
+Re-pairing defaults to Ask again. Standalone Auto mode and saved site grants do
+not set this policy. An unanswered tool call expires after 90 seconds and
+revokes that tab's access. Already-dispatched actions cannot be undone by Stop.
 
 The bridge supplies text snapshots and standard MCP image results. Inference is
 controlled by the calling agent, not by TabAgent's provider picker. Configure
@@ -264,7 +269,7 @@ CDP is required for capabilities a content script cannot provide:
 - Both storage areas are restricted to trusted extension contexts. API keys are AES-GCM encrypted locally, but the encryption key is in the same Chrome profile: this does not protect against profile theft or a compromised computer.
 - Content scripts cannot call privileged panel commands. Selection actions prepare drafts only. The extension installs with no required host permissions or global content script injection.
 - Page inspection runs in a separate JavaScript world. The page DOM, links and text remain untrusted; prompt injection and destructive model actions cannot be eliminated by these changes.
-- Ask mode gates page mutations unless you have explicitly granted the origin. Navigation and access to a new origin always ask. Requests reject unsafe URL schemes, remote HTTP and provider redirects.
+- Standalone Ask mode gates page mutations unless you have explicitly granted the origin; navigation and new origins always ask. Local MCP agents use the connection approval setting described above. Requests reject unsafe URL schemes, remote HTTP provider URLs and provider redirects.
 - The debugger permission remains powerful. Use supervised tasks and keep sensitive account administration, payments and secrets out of the agent's workflow.
 
 See [SECURITY.md](SECURITY.md) for findings, validation and limits.

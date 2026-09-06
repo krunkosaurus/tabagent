@@ -5,7 +5,9 @@
 import { createBrowserToolRegistry } from "../tools/browser-tools";
 import { sendCommandOnce } from "../tools/cdp";
 import { webURL } from "../core/security";
-import { EXTERNAL_TOOLS, parsePairingCode, validateExternalTool, type ExternalState } from "../shared/external-tools";
+import { EXTERNAL_TOOLS, parsePairingCode, validateExternalTool, type ExternalApprovalMode, type ExternalApprovalScope, type ExternalState } from "../shared/external-tools";
+
+interface Decision { allow: boolean; scope: ExternalApprovalScope }
 
 interface Connection {
   state: ExternalState;
@@ -18,7 +20,7 @@ interface Connection {
   setup?: Promise<void>;
   running?: Promise<void>;
   cleanup?: Promise<void>;
-  decide?: (allow: boolean) => void;
+  decide?: (decision: Decision) => void;
   seen: Set<string>;
 }
 const registry = createBrowserToolRegistry();
@@ -62,12 +64,12 @@ async function page(s: Connection): Promise<{ url: string; origin: string; frame
 }
 
 async function checkOrigin(s: Connection, origin: string): Promise<void> {
-  if ((await page(s)).origin !== origin) throw new Error("The page changed sites. Inspect it with a fresh tool call and approve access in TabAgent.");
+  if ((await page(s)).origin !== origin) throw new Error("The page changed sites during this action. Inspect it with a fresh tool call before continuing.");
 }
 
 async function approve(s: Connection, name: string, input: Record<string, unknown>, origin: string, reason: string): Promise<void> {
   alive(s);
-  const allowed = await new Promise<boolean>((resolve) => {
+  const decision = await new Promise<Decision>((resolve) => {
     s.decide = resolve;
     s.state.pending = { id: crypto.randomUUID(), name, input, origin, reason };
     s.state.status = "Waiting for your approval";
@@ -76,8 +78,11 @@ async function approve(s: Connection, name: string, input: Record<string, unknow
   s.decide = undefined;
   s.state.pending = undefined;
   alive(s);
-  if (!allowed) throw new Error("Denied by user");
+  if (!decision.allow) throw new Error("Denied by user");
   await checkOrigin(s, origin);
+  // A grant belongs to this live connection, never a stored site preference.
+  // Apply it only after the pending action's origin and ownership still match.
+  if (decision.scope === "connection") s.state.approvalMode = "connection";
 }
 
 async function invoke(s: Connection, message: { id: string; name: string; input: unknown }): Promise<void> {
@@ -88,13 +93,15 @@ async function invoke(s: Connection, message: { id: string; name: string; input:
     const tool = registry.get(message.name)!;
     const origin = (await page(s)).origin;
     if (origin !== s.approvedOrigin) {
-      await approve(s, "access_page", { origin }, origin,
-        "Share this site's page content with the connected agent and its configured model?");
+      if (s.state.approvalMode !== "connection") {
+        await approve(s, "access_page", { origin }, origin,
+          "Share this site's page content with the connected agent and its configured model?");
+      }
       s.approvedOrigin = origin;
     }
     // External access starts with explicit user sharing. Standalone Auto mode
     // and saved provider grants never silently authorize an external agent.
-    if (!EXTERNAL_TOOLS.find((t) => t.name === message.name)!.readonly) {
+    if (s.state.approvalMode !== "connection" && !EXTERNAL_TOOLS.find((t) => t.name === message.name)!.readonly) {
       await approve(s, message.name, input, origin, "Allow this action on the shared tab?");
     }
     s.state.status = `Running ${message.name}`;
@@ -116,7 +123,7 @@ async function invoke(s: Connection, message: { id: string; name: string; input:
     });
     alive(s);
     // Never return data collected while the tab was redirected to another site.
-    // navigate returns only the requested URL; the next read asks for new access.
+    // navigate returns only the requested URL; Ask mode gates the next site's read.
     if (message.name !== "navigate") await checkOrigin(s, origin);
     content = result.content;
     isError = !!result.isError;
@@ -142,14 +149,15 @@ export const externalAgent = {
   owns(tabId: number): boolean { return connections.has(tabId); },
   state(tabId: number): ExternalState | null { return connections.get(tabId)?.state ?? null; },
 
-  async connect(tabId: number, code: string): Promise<void> {
+  async connect(tabId: number, code: string, approvalMode: ExternalApprovalMode = "ask"): Promise<void> {
+    if (approvalMode !== "ask" && approvalMode !== "connection") throw new Error("Invalid approval setting");
     const { port, token } = parsePairingCode(code);
     if (connections.has(tabId)) throw new Error("Stop sharing this tab before pairing another agent.");
     if (!await chrome.permissions.contains({ origins: ["http://127.0.0.1/*"] })) throw new Error("Allow the local connection in TabAgent first.");
     // The background router serializes this with standalone run creation.
     const ws = new WebSocket(`ws://127.0.0.1:${port}/tabagent`);
     const s: Connection = {
-      state: { tabId, connected: true, agent: "Local agent", status: "Connecting…", actions: [] },
+      state: { tabId, connected: true, approvalMode, agent: "Local agent", status: "Connecting…", actions: [] },
       ws, controller: new AbortController(), closed: false, attached: false, seen: new Set(),
     };
     connections.set(tabId, s);
@@ -206,13 +214,14 @@ export const externalAgent = {
     };
   },
 
-  decide(tabId: number, id: string, allow: boolean): void {
+  decide(tabId: number, id: string, allow: boolean, scope: ExternalApprovalScope = "action"): void {
+    if ((scope !== "action" && scope !== "connection") || (scope === "connection" && allow !== true)) throw new Error("Invalid approval scope");
     const s = connections.get(tabId);
     if (!s || s.closed || s.state.pending?.id !== id || typeof allow !== "boolean") throw new Error("Approval has expired or belongs to another tab.");
     const decide = s.decide;
     s.decide = undefined;
     s.state.pending = undefined;
-    decide?.(allow);
+    decide?.({ allow, scope });
   },
 
   async disconnect(tabId: number, reason = "Stopped sharing — tab access revoked"): Promise<void> {
@@ -222,7 +231,7 @@ export const externalAgent = {
     // Abort synchronously; already-dispatched browser input cannot be undone.
     s.closed = true;
     s.controller.abort(new Error("Tab access revoked"));
-    s.decide?.(false);
+    s.decide?.({ allow: false, scope: "action" });
     s.decide = undefined;
     s.state.pending = undefined;
     s.state.status = "Stopping…";

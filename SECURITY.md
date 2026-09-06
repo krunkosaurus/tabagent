@@ -11,7 +11,7 @@ certification, a comprehensive penetration test, or an evaluation of model quali
 | Background commands accepted messages from content scripts without checking sender context. | Privileged commands require the extension's panel/popup. Content scripts can only submit selection drafts from their own top-level HTTP(S) tab. Offscreen commands and panel events require the background sender. |
 | Page selections could start an agent run; the open shadow root accepted synthetic clicks. | Selection requires trusted clicks, uses a closed shadow root, and only fills a draft for the user to submit. |
 | Model-generated plan text and tool-result previews were inserted as raw HTML. | Escape these fields; create screenshot elements using DOM APIs; limit images/fonts/frames/objects with CSP. |
-| Plan approval and Auto mode bypassed navigation approval; grants used hostname only; prompts omitted actual arguments. | Plan approval no longer skips action checks. Navigation always asks. Grants/decisions bind to origin and session; prompts display arguments. New origins require read-access approval, including in Auto mode. |
+| Plan approval and Auto mode bypassed navigation approval; grants used hostname only; prompts omitted actual arguments. | Standalone plan approval no longer skips action checks. Navigation always asks. Grants/decisions bind to origin and session; prompts display arguments. New origins require read-access approval, including in standalone Auto mode. |
 | `navigate` accepted arbitrary schemes; custom provider URLs allowed cleartext remote credentials and redirecting POST bodies. | Navigation permits HTTP(S) without embedded credentials. Providers require HTTPS except loopback, reject query/fragment URLs, omit cookies/referrers and reject redirects. |
 | Page JavaScript could tamper with the reference map and helpers in the main world. | DOM tools run in a named isolated world; native page DOM remains untrusted. Stop prevents subsequent tool CDP commands. |
 | Full conversation/page-text checkpoints were mirrored to disk; the model could silently store persistent memories and trigger extra inference. | Memory-only conversation checkpoints. Automatic memory tools/extraction removed; only user-edited notes feed future prompts. Old disk mirrors are removed on startup. |
@@ -26,13 +26,17 @@ certification, a comprehensive penetration test, or an evaluation of model quali
 
 ## Data flows and remaining risks
 
-### External MCP agents (v0.2.0)
+### External MCP agents (v0.2.1)
 
-Local Codex/Hermes sessions can now use an authenticated companion to control
+Local Codex/Hermes/Pi sessions can use an authenticated companion to control
 explicitly shared tabs. Each process has an ephemeral loopback socket and random
-pairing secret. The extension enforces per-tab ownership, always asks for external
-mutations/navigation and new-origin reads, and uses strict CDP without automatic
-reattachment. Stop, cancellation, disconnect and timeout revoke access. Page
+pairing secret. The extension enforces per-tab ownership and defaults to asking
+for mutations/navigation and new-origin reads. The user can select **Allow for
+this connection** in the panel to permit those operations, including form
+submissions, without further prompts on that tab. This grant stays in memory,
+ends with the connection and cannot be selected by the MCP client or inherited
+by other tabs. Both modes use strict CDP without automatic reattachment.
+Stop, cancellation, disconnect and timeout revoke access. Page
 confirmations are dismissed with `accept: false`, including in standalone mode.
 The shared API excludes arbitrary JavaScript, raw CDP and extension settings.
 The transport rejects page origins, rebinding Hosts, invalid tokens and spoofed
@@ -41,8 +45,10 @@ results. [Full architecture, limits and test coverage](docs/mcp.md).
 External-session page content goes to the calling agent and its configured
 model. The extension/companion do not persist those results or pairing secrets;
 the caller can retain them in its own history and media cache. Sharing is a
-permission to read the initial site. Each subsequently visited origin asks
-again, and tab listings expose only the metadata explicitly shared initially.
+permission to read the initial site in Ask mode; each subsequently visited
+origin asks again. Connection approval covers subsequent sites in the shared
+tab as well. In both modes, tab listings expose only the metadata explicitly
+shared initially, and origin changes during an action still discard its result.
 
 ### Standalone mode
 

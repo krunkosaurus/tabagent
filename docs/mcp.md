@@ -32,10 +32,15 @@ the client. The caller owns the reasoning loop, memory, model and vision route.
 - Only trusted, tab-bound extension panels can pair, approve or stop. Content
   scripts and pages cannot invoke these controls. Only explicitly shared tab
   metadata reaches the companion; it cannot enumerate the user's other tabs.
-- Pairing grants read access to the current origin. New origins require a
-  separate sidebar decision. Navigation and all mutating tools always ask.
-  Standalone saved grants and Auto mode do not carry over. Decisions bind to
-  one random approval ID, one tab and the origin checked before/after approval.
+- Pairing defaults to Ask mode: read access to the current origin, with separate
+  sidebar decisions for new origins, navigation and mutating tools. The user
+  can select **Allow for this connection** when pairing or on a pending approval.
+  That explicitly permits actions, form submissions and reading new sites in
+  this tab for the lifetime of this connection. It is never stored or inherited
+  by other tabs or replacement connections. Standalone grants and Auto mode do
+  not carry over. Pending decisions bind to one random approval ID, one tab and
+  the origin checked before/after approval; a changed-origin decision grants
+  nothing. The MCP client cannot select or change the approval mode.
 - The companion validates arguments, serializes each tab and binds replies to
   the exact authenticated tab socket. The extension revalidates the whitelist
   and bounded argument schema. There is no arbitrary evaluation, raw CDP,
@@ -81,7 +86,8 @@ origin/Host/token rejection, response spoofing, image encoding and cancellation.
 `npm run test:browser` additionally drives real Chrome extension APIs and CDP:
 pairing, two agents/tabs, standalone ownership exclusion, content-script attacks,
 isolated snapshots, decodable images, approval restoration, denial, wrong-tab
-decisions, changed-origin reads, Stop, MCP cancellation and debugger loss. The
+decisions, changed-origin reads, connection approval at pairing and mid-session,
+grant isolation/reset, Stop, MCP cancellation and debugger loss. The
 original standalone regression suite runs as well. CI grants localhost host
 access only to a copied test extension and uses disposable browser profiles.
 

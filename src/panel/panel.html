@@ -47,15 +47,24 @@
       <div id="external-form">
         <label for="external-code">Pairing code</label>
         <input id="external-code" type="password" autocomplete="off" spellcheck="false" placeholder="tabagent:…" />
-        <p>Share this tab's page content with that agent and its configured model. Each action and new site asks for approval here.</p>
+        <p>Share this tab's page content with that agent and its configured model.</p>
+        <label for="external-approval-mode">Approvals</label>
+        <select id="external-approval-mode" aria-describedby="external-mode-help">
+          <option value="ask">Ask before each action</option>
+          <option value="connection">Allow for this connection</option>
+        </select>
+        <p id="external-mode-help">Allow for this connection permits actions, form submissions and reading new sites in this tab until you stop sharing.</p>
         <button id="external-connect" type="button">Share this tab</button>
       </div>
+      <p id="external-permissions" hidden></p>
       <button id="external-stop" type="button" hidden>Stop sharing</button>
       <div id="external-approval" hidden>
         <p id="external-reason"></p>
         <pre id="external-action"></pre>
         <button id="external-allow" type="button">Allow action</button>
+        <button id="external-allow-connection" type="button" aria-describedby="external-grant-help">Allow for this connection</button>
         <button id="external-deny" type="button">Deny action</button>
+        <p id="external-grant-help">Allow for this connection permits actions, form submissions and reading new sites in this tab until you stop sharing.</p>
       </div>
       <ol id="external-actions" aria-label="Local agent activity"></ol>
     </details>

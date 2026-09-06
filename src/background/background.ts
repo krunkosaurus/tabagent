@@ -311,7 +311,7 @@ async function handlePanelRequest(req: PanelRequest, sender: chrome.runtime.Mess
     case "external_connect":
       if (typeof req.code !== "string" || req.code.length > 100) throw new Error("Invalid pairing code");
       if ((await sessionsForTab(tabId!)).some(isBusy)) throw new Error("Stop this tab's current run before sharing it.");
-      await externalAgent.connect(tabId!, req.code);
+      await externalAgent.connect(tabId!, req.code, req.approvalMode);
       return { ok: true };
 
     case "external_stop":
@@ -319,7 +319,7 @@ async function handlePanelRequest(req: PanelRequest, sender: chrome.runtime.Mess
       return { ok: true };
 
     case "external_decision":
-      externalAgent.decide(tabId!, req.id, req.allow);
+      externalAgent.decide(tabId!, req.id, req.allow, req.scope);
       return { ok: true };
 
     case "list_providers":

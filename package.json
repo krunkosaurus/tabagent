@@ -7,7 +7,7 @@
     "typecheck": "tsc --noEmit",
     "build": "node build.mjs",
     "clean": "rm -rf dist build",
-    "test": "node tests/security.mjs && node tests/mcp.mjs && node tests/pi.mjs",
+    "test": "node tests/security.mjs && node tests/pairing.mjs && node tests/mcp.mjs && node tests/pi.mjs",
     "test:browser": "npm run build && node tests/browser.mjs && node tests/mcp-browser.mjs && node tests/pi-browser.mjs",
     "mcp": "node mcp/server.mjs"
   },

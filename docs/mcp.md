@@ -29,10 +29,21 @@ Standard MCP does not expose a chat tool or grant access to the host conversatio
 
 - The MCP process binds an OS-selected port on `127.0.0.1` only. It has no network
   MCP endpoint, discovery HTTP API, CORS access, or credential file.
-- A cryptographically random 256-bit token is returned only over the agent's
-  stdio `tabagent_connect` tool. The code contains the port and token. The Chrome
-  panel parses a fixed grammar; it cannot be used to select another hostname,
-  path, scheme, query or arbitrary URL.
+- `tabagent_connect` normally returns five uppercase letters/digits, excluding
+  confusing `0`, `1`, `I` and `O`. The first symbol locates a temporary listener
+  on `127.0.0.1:54200–54231`; four cryptographically random symbols authenticate
+  the exchange. The code expires after two minutes, works once, and locks after
+  five failed guesses across all sockets. Asking for a new code invalidates the
+  previous unused one. An existing shared tab is unaffected.
+- The temporary `/tabagent/pair` WebSocket requires the exact loopback Host and
+  a Chrome extension Origin. It releases the actual bridge port and random
+  256-bit token only after validating the short code, then closes. Idle peers
+  are dropped after two seconds; request size and concurrent peers are bounded.
+  There is no separate daemon, registry, credential file or HTTP discovery API.
+- Full `tabagent:PORT:TOKEN` codes remain supported and are returned if all 32
+  temporary slots are occupied. The panel masks these longer codes. Both code
+  formats use a fixed grammar and cannot select another hostname, path, scheme,
+  query or arbitrary URL. Credentials never go into a socket URL or Chrome storage.
 - WebSocket upgrades require the exact loopback Host, `/tabagent` path and a
   `chrome-extension://` origin. Authentication checks the token in the first
   frame using a constant-time comparison. Origin alone never authorizes access.
@@ -68,11 +79,20 @@ Standard MCP does not expose a chat tool or grant access to the host conversatio
 
 ## Limits and validation
 
+Short codes trade entropy for convenience on a trusted local computer. At a
+known listener there are 1,048,576 possible suffixes; five random guesses have
+at most about a 1-in-210,000 chance per issued code. This is weaker than knowing
+the full 256-bit secret: guessing the short code successfully releases that
+secret. Loopback binding and Origin checks block ordinary websites and remote
+network clients, but local programs can forge Origin headers. Do not expose or
+forward these ports to a network. The expiry/guess-budget rationale is discussed
+in [RFC 8628, section 5.1](https://www.rfc-editor.org/rfc/rfc8628.html#section-5.1).
+
 This is a supervised browser control interface, not a sandbox for a malicious
 local OS process or a guarantee against prompt injection. Another process with
 the pairing token and local browser privileges is within the trusted local
 boundary. The calling agent may store the code and tool results in its history;
-the code becomes useless when its companion exits. MCP client names are display
+short codes also stop working after use or expiry. MCP client names are display
 labels, not independently verified identities. Page DOM can change after a
 check; origin checks do not authenticate page content or undo dispatched input.
 Dialog confirmations are dismissed, never automatically accepted.

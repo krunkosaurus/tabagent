@@ -52,8 +52,8 @@ export default function tabagent(pi) {
     description: 'Get a pairing code for TabAgent browser tools and optional in-tab chat',
     async handler(_args, ctx) {
       const result = await (await getBridge()).call('tabagent_connect');
-      const { pairingCode } = JSON.parse(result.content[0].text);
-      ctx.ui.notify(`TabAgent: paste this into Local agent → Share this tab:\n${pairingCode}`, 'info');
+      const { pairingCode, expiresInSeconds } = JSON.parse(result.content[0].text);
+      ctx.ui.notify(`TabAgent: enter this in Local agent → Share this tab:\n${pairingCode}${expiresInSeconds ? '\nWorks once; expires in 2 minutes.' : ''}`, 'info');
     },
   });
 }

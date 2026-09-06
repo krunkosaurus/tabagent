@@ -2,22 +2,26 @@ import { randomUUID } from 'node:crypto';
 import { CHAT_TEXT_LIMIT, CHAT_HISTORY_LIMIT, CHAT_THINKING_LIMIT } from '../build/mcp-tools.mjs';
 
 // Redact even partially streamed pairing tokens, before clipping any text.
-const redact = (text) => text.replace(/tabagent:[1-9][0-9]{0,4}:[a-f0-9]*/g, '[pairing code hidden]');
+const redact = (text, codes) => {
+  text = text.replace(/tabagent:[1-9][0-9]{0,4}:[a-f0-9]*/g, '[pairing code hidden]');
+  for (const code of codes) text = text.replace(new RegExp(`\\b${code}\\b`, 'gi'), '[pairing code hidden]');
+  return text;
+};
 
 // Chat text and current model thinking have separate, bounded fields. No raw
 // tool output, images, signatures, system prompts or other sessions are copied.
-function visibleText(message) {
+function visibleText(message, codes) {
   if (!['user', 'assistant'].includes(message?.role)) return null;
   const content = message.content;
   return redact(typeof content === 'string' ? content : (Array.isArray(content) ? content : [])
-    .filter((part) => part.type === 'text' && typeof part.text === 'string').map((part) => part.text).join('\n'));
+    .filter((part) => part.type === 'text' && typeof part.text === 'string').map((part) => part.text).join('\n'), codes);
 }
 
-function thinkingText(message) {
+function thinkingText(message, codes) {
   if (message?.role !== 'assistant' || !Array.isArray(message.content)) return undefined;
   const parts = message.content.filter((part) => part.type === 'thinking' && !part.redacted && typeof part.thinking === 'string');
   if (!parts.length) return undefined;
-  const text = redact(parts.map((part) => part.thinking).join('\n'));
+  const text = redact(parts.map((part) => part.thinking).join('\n'), codes);
   return { text: text.slice(-CHAT_THINKING_LIMIT), truncated: text.length > CHAT_THINKING_LIMIT };
 }
 
@@ -28,8 +32,14 @@ export class PiChat {
   notice = '';
   listeners = new Set();
   active = new Map();
+  hiddenCodes = new Set();
   closed = false;
   constructor(pi, ctx) { this.pi = pi; this.ctx = ctx; this.restore(); }
+  hidePairingCode(code) {
+    if (!/^[A-Z2-9]{5}$/.test(code)) return;
+    this.hiddenCodes.add(code);
+    if (this.hiddenCodes.size > 64) this.hiddenCodes.delete(this.hiddenCodes.values().next().value);
+  }
   restore() {
     this.messages = [];
     this.active.clear();
@@ -39,8 +49,8 @@ export class PiChat {
     for (const entry of this.ctx.sessionManager.getBranch()) {
       if (entry.type !== 'message') continue;
       if (entry.message.role === 'user') thinking = undefined;
-      else thinking = thinkingText(entry.message) ?? thinking;
-      const text = visibleText(entry.message);
+      else thinking = thinkingText(entry.message, this.hiddenCodes) ?? thinking;
+      const text = visibleText(entry.message, this.hiddenCodes);
       if (text === null || !text.trim()) continue;
       this.messages.push({ id: randomUUID(), role: entry.message.role, text });
       this.trim();
@@ -98,14 +108,14 @@ export class PiChat {
       if (event.message.role === 'assistant') {
         if (event.type === 'message_start') this.thinkingMessageId = undefined;
         const kind = event.assistantMessageEvent?.type;
-        const thinking = thinkingText(event.message);
+        const thinking = thinkingText(event.message, this.hiddenCodes);
         if (thinking || kind === 'thinking_start' || kind === 'thinking_delta') {
           this.thinkingMessageId ??= randomUUID();
           this.thinking = { ...(thinking ?? { text: '', truncated: false }), id: this.thinkingMessageId,
             active: event.type !== 'message_end' && (!kind || kind === 'thinking_start' || kind === 'thinking_delta') };
         } else if (this.thinking) this.thinking.active = false;
       }
-      const text = visibleText(event.message);
+      const text = visibleText(event.message, this.hiddenCodes);
       if (text !== null) {
         const role = event.message.role;
         if (event.type === 'message_start') this.active.delete(role);
@@ -172,5 +182,6 @@ export class PiChat {
     this.active.clear();
     this.thinking = undefined;
     this.thinkingMessageId = undefined;
+    this.hiddenCodes.clear();
   }
 }

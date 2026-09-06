@@ -150,17 +150,18 @@ Set the client's tool-call timeout to at least **120 seconds** and keep the
 companion alive between calls. TabAgent exposes 14 tools: 11 browser actions plus
 `tabagent_connect`, `tabagent_tabs`, and `tabagent_disconnect`.
 
-The companion has no HTTP MCP endpoint. The loopback address inside a pairing
-code is for the Chrome extension's connection, not a server URL to enter in an
-MCP client. A client that only supports remote HTTP MCP cannot use this setup
-directly.
+The companion has no HTTP MCP endpoint. Pairing codes are for the Chrome
+extension, not server URLs to enter in an MCP client. A client that only supports
+remote HTTP MCP cannot use this setup directly.
 
 ## Pair a tab and test it
 
 1. In your agent's chat, say: **“Use TabAgent to inspect my browser tab.”**
-2. The agent calls `tabagent_connect` and gives you a private pairing code.
+2. The agent calls `tabagent_connect` and gives you a five-character uppercase
+   pairing code, such as `K7P4M`. It works once and expires after two minutes.
 3. Open an ordinary HTTP(S) page, click TabAgent, expand **Local agent**, and
-   paste the code. Choose an approval setting, click **Share this tab**, and
+   enter the code. The **Share this tab** button highlights when it is complete.
+   Choose an approval setting, click **Share this tab**, and
    accept Chrome's local connection permission when requested.
 4. Tell the agent: **“List the tabs shared with TabAgent, take a snapshot of the
    tab I just shared, and summarize its heading and visible controls.”**
@@ -200,10 +201,13 @@ Click **Stop sharing** in the panel or ask the agent to call
 or debugger loss ends that tab's access. Reloading the extension also ends
 sharing. Already-dispatched page actions cannot be undone by stopping.
 
-To reconnect, ask the active agent for its pairing code and share the tab again.
-The same companion can return the same code; restarting the companion creates
-a new one. Keep codes in the agent conversation and extension UI, never on a
-webpage or in committed configuration.
+To reconnect or share another tab, ask the active agent for a fresh pairing code.
+Each short code works once. A new request replaces the previous unused code;
+five incorrect guesses also invalidate it. Code expiry does not end an already
+paired connection. Keep codes in the agent conversation and extension UI, never
+on a webpage or in committed configuration. Full `tabagent:PORT:TOKEN` codes
+remain accepted; the companion uses that format if all temporary pairing slots
+are occupied by other local apps. See [pairing security](mcp.md#pairing-and-trust-boundaries).
 
 Repeat pairing on another tab to let one agent work across several shared tabs.
 Each tab has one owner. Independent agents need separate companion processes;
@@ -217,7 +221,7 @@ across those conversations too.
 | Agent cannot find TabAgent tools | Check the config path and absolute Node/checkout paths, rebuild, and start a fresh agent session. In Codex use `/mcp`; in Pi use `/mcp reconnect tabagent`. Check tool filters if only some tools appear. |
 | Missing `build/mcp-tools.mjs` or an MCP package | Run `npm ci --ignore-scripts` and `npm run build` from the checkout. Keep the full checkout; the Chrome `dist/` directory alone does not include the companion. |
 | `tabagent_tabs` returns an empty list | The server is reachable, but this companion owns no tabs. Pair from this agent session on your intended tab. |
-| Pairing fails | Keep the agent open, get its current code, and allow Chrome's local connection permission. Confirm the companion and Chrome share the same computer and loopback network; a remote shell or separate container is a different environment. |
+| Pairing fails | Get a fresh code; short codes expire after two minutes, work once and lock after five incorrect guesses. Keep the agent open and allow Chrome's local connection permission. The companion and Chrome must share the same computer and loopback network; a remote shell or separate container is a different environment. |
 | Tool call waits without page activity | Check the panel for an approval prompt. The companion revokes access after 90 seconds without completion; the 120-second client timeout does not extend that limit. |
 | Every action asks again | Choose **Allow for this connection** in TabAgent when that is the permission you want. If the prompt appears in your agent application, check that application's tool approvals separately. |
 | Panel says it is waiting for the agent | Give the task in the agent's chat. If it selects another browser tool, explicitly ask it to use TabAgent. |

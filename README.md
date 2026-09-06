@@ -187,6 +187,11 @@ to the companion process, so clients that reuse it across conversations also
 share access. Tool timeouts, cancellation, debugger loss, tab closure and
 extension reload end sharing. Already-dispatched actions cannot be undone.
 
+Pairing uses a five-character uppercase code, such as `K7P4M`. It works once,
+expires after two minutes, and locks after five incorrect guesses. Request a
+fresh code for each tab. The established connection still uses a random 256-bit
+secret and continues after the short code expires.
+
 The bridge returns text snapshots and MCP images. The extension and companion
 keep pairing and page results in memory; the calling agent can retain them in
 its own history or media cache. See [MCP architecture and security](docs/mcp.md)

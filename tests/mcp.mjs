@@ -6,6 +6,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { WebSocket } from 'ws';
 import { EXTERNAL_TOOLS, parsePairingCode, validateExternalTool } from '../build/mcp-tools.mjs';
+import { redeemPairing } from './pairing-client.mjs';
 
 const clients = [];
 const peers = [];
@@ -20,8 +21,7 @@ async function start(name) {
   await client.connect(transport);
   return client;
 }
-async function pair(code, tabId, otherToken) {
-  const { port, token } = parsePairingCode(code);
+async function pair({ port, token }, tabId, otherToken) {
   const ws = new WebSocket(`ws://127.0.0.1:${port}/tabagent`, { origin });
   peers.push(ws);
   await once(ws, 'open');
@@ -66,18 +66,21 @@ try {
   const ca = json(await call(a, 'tabagent_connect')).pairingCode;
   const cb = json(await call(b, 'tabagent_connect')).pairingCode;
   assert.notEqual(ca, cb);
-  const { port } = parsePairingCode(ca);
+  assert.match(ca, /^[A-Z2-9]{5}$/);
+  const credentialsA = await redeemPairing(ca);
+  const credentialsB = await redeemPairing(cb);
+  const { port } = credentialsA;
   for (const headers of [{}, { Origin: 'null' }, { Origin: 'http://localhost:1234' }, { Origin: 'https://evil.example' }, { Origin: origin, Host: 'evil.example' }]) {
     assert.equal(await rejectedHandshake(port, headers), 403);
   }
   assert.equal(await rejectedHandshake(port, { Origin: origin }, '/tabagent?token=anything'), 403);
   assert.equal((await fetch(`http://127.0.0.1:${port}/`)).status, 404);
-  await pair(ca, 100, 'f'.repeat(64));
+  await pair(credentialsA, 100, 'f'.repeat(64));
   assert.deepEqual(json(await call(a, 'tabagent_tabs')).tabs, []);
   console.log('PASS: real stdio discovery; web/null origins, rebinding Hosts, URL credentials and wrong tokens rejected');
 
-  const wa = await pair(ca, 100);
-  const wb = await pair(cb, 200);
+  const wa = await pair(credentialsA, 100);
+  const wb = await pair(credentialsB, 200);
   assert.equal(json(await call(a, 'tabagent_tabs')).tabs[0].tabId, 100);
   assert.equal((await call(b, 'tabagent_snapshot', { tabId: 100 })).isError, true);
   assert.equal((await call(a, 'tabagent_evaluate', { tabId: 100, expression: '1' })).isError, true);
@@ -90,7 +93,7 @@ try {
   assert.deepEqual(image.content, [{ type: 'image', mimeType: 'image/jpeg', data: 'YWJj' }]);
   console.log('PASS: sessions isolate tabs; one in-flight action per tab; screenshots use MCP image content');
 
-  const wa2 = await pair(ca, 101);
+  const wa2 = await pair(credentialsA, 101);
   const next = once(wa, 'message');
   const snapshot = call(a, 'tabagent_snapshot', { tabId: 100 });
   const invocation2 = JSON.parse((await next)[0]);

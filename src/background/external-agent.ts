@@ -6,6 +6,7 @@ import { createBrowserToolRegistry } from "../tools/browser-tools";
 import { sendCommandOnce } from "../tools/cdp";
 import { isExtensionPage, webURL } from "../core/security";
 import { panelTabId } from "../shared/panel-target";
+import { redeemPairingCode } from "./pairing";
 import { chatId, emptyChat, validateChatRequest, validateChatState, type ChatRequest } from "../shared/external-chat";
 import { EXTERNAL_TOOLS, parsePairingCode, validateExternalTool, type ExternalAction, type ExternalApprovalMode, type ExternalApprovalScope, type ExternalState } from "../shared/external-tools";
 
@@ -13,7 +14,7 @@ interface Decision { allow: boolean; scope: ExternalApprovalScope }
 
 interface Connection {
   state: ExternalState;
-  ws: WebSocket;
+  ws?: WebSocket;
   controller: AbortController;
   approvedOrigin?: string;
   closed: boolean;
@@ -209,7 +210,7 @@ async function invoke(s: Connection, message: { id: string; name: string; input:
   action.finishedAt = Date.now();
   if (isError) action.error = content.slice(0, 300);
   publish(s);
-  if (s.ws.readyState === WebSocket.OPEN) s.ws.send(JSON.stringify({ type: "result", id: message.id, content, isError }));
+  if (s.ws?.readyState === WebSocket.OPEN) s.ws.send(JSON.stringify({ type: "result", id: message.id, content, isError }));
 }
 
 export const externalAgent = {
@@ -218,21 +219,32 @@ export const externalAgent = {
 
   async connect(tabId: number, code: string, approvalMode: ExternalApprovalMode = "ask"): Promise<void> {
     if (approvalMode !== "ask" && approvalMode !== "connection") throw new Error("Invalid approval setting");
-    const { port, token } = parsePairingCode(code);
+    const pairing = parsePairingCode(code);
     if (connections.has(tabId)) throw new Error("Stop sharing this tab before pairing another agent.");
     if (!await chrome.permissions.contains({ origins: ["http://127.0.0.1/*"] })) throw new Error("Allow the local connection in TabAgent first.");
     // The background router serializes this with standalone run creation.
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/tabagent`);
     const s: Connection = {
       state: {
         connectionId: crypto.randomUUID(), revision: 0, connectedAt: Date.now(),
         tabId, connected: true, phase: "connecting", approvalMode,
         agent: "Local agent", status: "Connecting…", actionCount: 0, actions: [],
       },
-      ws, controller: new AbortController(), closed: false, attached: false, seen: new Set(), chatPending: new Map(),
+      controller: new AbortController(), closed: false, attached: false, seen: new Set(), chatPending: new Map(),
     };
     connections.set(tabId, s);
     publish(s);
+    let ws: WebSocket;
+    let token: string;
+    try {
+      const credentials = await redeemPairingCode(pairing, s.controller.signal);
+      alive(s);
+      token = credentials.token;
+      ws = new WebSocket(`ws://127.0.0.1:${credentials.port}/tabagent`);
+      s.ws = ws;
+    } catch (error) {
+      await revoke(s, (error as Error).message);
+      throw error;
+    }
     let lastPong = Date.now();
     const connectionTimer = setTimeout(() => void revoke(s, "Connection timed out. Ask your agent for a fresh pairing code."), 15_000);
     ws.onopen = () => { if (!s.closed) ws.send(JSON.stringify({ type: "auth", token })); };
@@ -302,8 +314,9 @@ export const externalAgent = {
   async chat(tabId: number, connectionId: string, input: ChatRequest): Promise<void> {
     const request = validateChatRequest(input);
     const s = connections.get(tabId);
+    const ws = s?.ws;
     if (!s || s.closed || !s.heartbeat || s.state.connectionId !== connectionId ||
-        s.state.chat?.sessionId !== request.sessionId || s.ws.readyState !== WebSocket.OPEN) throw new Error("Chat connection has ended. Pair again.");
+        s.state.chat?.sessionId !== request.sessionId || ws?.readyState !== WebSocket.OPEN) throw new Error("Chat connection has ended. Pair again.");
     if (s.chatPending.has(request.id) || s.chatPending.size >= 4) throw new Error("Wait for the previous chat request.");
     if (request.action !== "attach" && !s.state.chat.attached) throw new Error("Attach chat to this tab first.");
     if (request.action === "attach") s.chatRequested = true;
@@ -318,7 +331,7 @@ export const externalAgent = {
         if ((request.action === "attach" && error && !s.state.chat?.attached) || (request.action === "detach" && !error)) s.chatRequested = false;
         if (error) reject(new Error(error)); else resolve();
       } });
-      s.ws.send(JSON.stringify(request));
+      ws.send(JSON.stringify(request));
     });
   },
 
@@ -354,7 +367,7 @@ export const externalAgent = {
       action.error = "Connection ended. An action already sent to the page may have taken effect.";
     }
     clearInterval(s.heartbeat);
-    s.ws.close();
+    s.ws?.close();
     publish(s);
     s.cleanup = (async () => {
       await s.setup?.catch(() => {});

@@ -9,6 +9,7 @@ import { WebSocketServer } from 'ws';
 import { chromium } from 'playwright';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { redeemPairing } from './pairing-client.mjs';
 
 // Real MCP stdio processes -> authenticated WebSocket -> real extension -> CDP.
 // No model API, personal browser profile, public website or customer data.
@@ -87,19 +88,25 @@ try {
   const hermes = await client('Hermes');
   const codeA = json(await call(codex, 'tabagent_connect')).pairingCode;
   const codeB = json(await call(hermes, 'tabagent_connect')).pairingCode;
+  const credentialsA = await redeemPairing(codeA);
+  const privateCodeA = `tabagent:${credentialsA.port}:${credentialsA.token}`;
+  const freshCode = async (agent) => json(await call(agent, 'tabagent_connect')).pairingCode;
   async function openPairing(t) {
     if (!await t.panel.locator('#external-panel').evaluate((node) => node.open)) await t.panel.locator('#external-summary').click();
   }
-  async function share(t, code, approvalMode = 'ask') {
+  async function share(t, agent, approvalMode = 'ask') {
+    const code = await freshCode(agent);
     await openPairing(t);
-    await t.panel.locator('#external-code').fill(code);
+    await t.panel.locator('#external-code').fill(code.toLowerCase());
+    assert.equal(await t.panel.locator('#external-code').inputValue(), code);
+    assert.equal(await t.panel.locator('#external-connect').evaluate((node) => node.classList.contains('is-ready')), true);
     await t.panel.locator('#external-approval-mode').selectOption(approvalMode);
     await t.panel.locator('#external-connect').click();
     await until(async () => (await t.send({ kind: 'get_state' })).data.external?.status.startsWith('Connected'), 'tab paired');
   }
   assert.equal((await a.send({ kind: 'external_connect', code: codeA, approvalMode: 'forever' })).ok, false);
-  await share(a, codeA);
-  await share(b, codeB);
+  await share(a, codex);
+  await share(b, hermes);
   assert.equal((await a.send({ kind: 'get_state' })).data.external.approvalMode, 'ask');
   assert.deepEqual(json(await call(codex, 'tabagent_tabs')).tabs.map((t) => t.tabId), [a.tabId]);
   assert.deepEqual(json(await call(hermes, 'tabagent_tabs')).tabs.map((t) => t.tabId), [b.tabId]);
@@ -149,7 +156,7 @@ try {
   }, image.content[0]);
   assert(dimensions[0] > 100 && dimensions[1] > 100);
   const storage = await worker.evaluate(async () => ({ local: await chrome.storage.local.get(null), session: await chrome.storage.session.get(null) }));
-  assert(!JSON.stringify(storage).includes(codeA.split(':')[2]), 'pairing secrets never persist');
+  assert(!JSON.stringify(storage).includes(credentialsA.token), 'pairing secrets never persist');
   assert(!JSON.stringify(storage).includes(image.content[0].data.slice(0, 100)), 'screenshots never persist');
   console.log('PASS: real content-script denial, isolated-world snapshots and decodable MCP image output without stored secrets/images');
 
@@ -242,7 +249,7 @@ try {
 
   // Pair again on the new site, then exercise MCP cancellation and Chrome's stop.
   await openPairing(a);
-  await a.panel.locator('#external-code').fill(codeA);
+  await a.panel.locator('#external-code').fill(privateCodeA); // Full-code compatibility.
   await a.panel.locator('#external-connect').click();
   await until(async () => json(await call(codex, 'tabagent_tabs')).tabs.length, 're-pair');
   const fresh = await call(codex, 'tabagent_snapshot', { tabId: a.tabId });
@@ -265,17 +272,19 @@ try {
     catch { return false; }
   }, b.tabId);
   assert.equal(attached, false);
+  const raceCode = await freshCode(hermes);
   const raced = await Promise.all([
-    b.send({ kind: 'external_connect', code: codeB }), b.send({ kind: 'external_stop' }),
+    b.send({ kind: 'external_connect', code: raceCode }), b.send({ kind: 'external_stop' }),
   ]);
-  assert(raced.every((r) => r.ok));
+  assert.equal(raced[1].ok, true);
+  if (!raced[0].ok) assert.match(raced[0].error, /stopp|revok/i);
   assert.equal((await b.send({ kind: 'get_state' })).data.external, null);
   console.log('PASS: accepted navigation and a rapid Share/Stop race follow user intent');
 
   // A tab-bound user decision can authorize the rest of this connection.
   // No model/client parameter, stored Auto preference or other tab can do so.
   await a.page.goto(url + '/grant');
-  await share(a, codeA);
+  await share(a, codex);
   const grantedSnapshot = await call(codex, 'tabagent_snapshot', { tabId: a.tabId });
   const grantedRef = grantedSnapshot.content[0].text.match(/textbox "Name" \[ref=([^\]]+)\]/)[1];
   const grantCall = call(codex, 'tabagent_type', { tabId: a.tabId, ref: grantedRef, text: 'Allowed connection' });
@@ -328,7 +337,7 @@ try {
   console.log('PASS: one explicit grant permits repeated actions, navigation and new-origin reads; content scripts and other panels cannot grant it');
 
   // The same MCP process can own another tab without inheriting this grant.
-  await share(b, codeA);
+  await share(b, codex);
   const otherWrite = call(codex, 'tabagent_scroll', { tabId: b.tabId, direction: 'down' });
   await pending(b);
   assert.equal((await b.send({ kind: 'get_state' })).data.external.approvalMode, 'ask');
@@ -341,7 +350,7 @@ try {
   assert.deepEqual(json(await call(codex, 'tabagent_tabs')).tabs.map((tab) => tab.tabId), [b.tabId]);
   // Re-pair without selecting a mode: the previous grant must be gone.
   await openPairing(a);
-  await a.panel.locator('#external-code').fill(codeA);
+  await a.panel.locator('#external-code').fill(await freshCode(codex));
   await a.panel.locator('#external-connect').click();
   await until(async () => (await a.send({ kind: 'get_state' })).data.external?.status.startsWith('Connected'), 'default re-pair');
   assert.equal((await a.send({ kind: 'external_decision', id: grant.id, allow: true, scope: 'connection' })).ok, false);
@@ -351,7 +360,7 @@ try {
   assert.equal((await askAgain).isError, true);
   await a.panel.locator('#external-stop').click();
   await until(async () => !(await a.send({ kind: 'get_state' })).data.external, 'default connection stopped');
-  await share(a, codeA, 'connection');
+  await share(a, codex, 'connection');
   assert.equal(await a.panel.locator('#external-actions > li').count(), 0, 'new connections start a fresh activity history');
   await automatic('tabagent_scroll', { direction: 'down' });
   await worker.evaluate((tabId) => chrome.debugger.detach({ tabId }), a.tabId);

@@ -49,8 +49,10 @@ include the Pi companion. Rebuild and restart Pi after updating the checkout.
 ## Pair and continue
 
 1. In the Pi session you want to continue, run **`/tabagent`**, or ask Pi to use
-   `tabagent_connect`. It displays a private pairing code.
-2. Open TabAgent on the intended HTTP(S) tab. Under **Local agent**, paste the
+   `tabagent_connect`. It displays a five-character uppercase pairing code.
+   Short codes work once and expire after two minutes; request a fresh code for
+   each tab or retry. Existing connections continue after the code expires.
+2. Open TabAgent on the intended HTTP(S) tab. Under **Local agent**, enter the
    code, select your browser approval setting, and click **Share this tab**.
 3. Click **Chat with Pi in this tab**. This explicitly displays recent messages
    from that Pi conversation and lets this tab submit prompts to Pi.

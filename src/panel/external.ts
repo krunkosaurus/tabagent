@@ -195,6 +195,8 @@ export function initExternal(send: (request: PanelRequest) => Promise<unknown>):
   const input = el<HTMLInputElement>("external-code");
   const button = el<HTMLButtonElement>("external-connect");
   const updatePairingReady = () => {
+    if (/^[a-z0-9]{0,5}$/i.test(input.value.trim())) input.value = input.value.toUpperCase();
+    input.type = input.value.trim().length > 5 ? "password" : "text";
     let ready = false;
     try { parsePairingCode(input.value); ready = true; } catch { /* Incomplete codes stay neutral. */ }
     button.classList.toggle("is-ready", ready);

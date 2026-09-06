@@ -75,12 +75,7 @@ export function validateExternalTool(name: string, input: unknown): Record<strin
   return record;
 }
 
-export function parsePairingCode(code: string): { port: number; token: string } {
-  const match = /^tabagent:([1-9][0-9]{0,4}):([a-f0-9]{64})$/.exec(code.trim());
-  if (!match || Number(match[1]) > 65535) throw new Error("Paste the pairing code from your agent's tabagent_connect tool.");
-  return { port: Number(match[1]), token: match[2] };
-}
-
+export * from "./pairing";
 export * from "./external-chat";
 import type { ExternalChatState } from "./external-chat";
 export type ExternalApprovalMode = "ask" | "connection";

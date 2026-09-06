@@ -52,8 +52,8 @@ try {
   }
   const a = await tab('a');
   const b = await tab('b');
-  const code = await pi.code();
   async function share(t) {
+    const code = await pi.code();
     await t.panel.locator('#external-summary').click();
     await t.panel.locator('#external-code').fill(code);
     await t.panel.locator('#external-connect').click();
@@ -133,11 +133,14 @@ try {
   assert.equal(await thinkingBody.isVisible(), true);
   await until(() => thinkingBody.evaluate((node) => node.getBoundingClientRect().bottom <= document.querySelector('#external-chat-scroll').getBoundingClientRect().bottom), 'expanded thinking is brought into view');
   assert.equal(await thinkingBody.textContent(), thoughtStart + thoughtTail);
-  pi.think(`\n<img src=x onerror=alert(1)> ${code.slice(0, -8)} EXPANDED_THOUGHT`);
+  const privateToken = 'a'.repeat(64);
+  const shortCode = await pi.code();
+  pi.think(`\n<img src=x onerror=alert(1)> tabagent:12345:${privateToken.slice(0, -8)} ${shortCode} EXPANDED_THOUGHT`);
   await until(() => thinkingBody.textContent().then((text) => text.endsWith('EXPANDED_THOUGHT')), 'expanded thinking continues streaming');
   assert.equal(await thinking.evaluate((node) => node.open), true);
   assert.equal(await thinking.locator('img').count(), 0);
-  assert(!(await thinkingBody.textContent()).includes(code.split(':')[2].slice(0, -8)));
+  assert(!(await thinkingBody.textContent()).includes(privateToken.slice(0, -8)));
+  assert(!(await thinkingBody.textContent()).includes(shortCode));
   await thinkingBody.evaluate((node) => { node.scrollTop = 0; });
   pi.think('\nMore detail while the beginning is being read.');
   await until(() => thinkingBody.textContent().then((text) => text.includes('beginning is being read')), 'thinking advances without moving the reader');

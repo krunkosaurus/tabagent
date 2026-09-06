@@ -46,7 +46,8 @@
       <p id="external-status" role="status">Ask Codex or Hermes to connect to TabAgent, then paste its pairing code here.</p>
       <div id="external-form">
         <label for="external-code">Pairing code</label>
-        <input id="external-code" type="password" autocomplete="off" spellcheck="false" placeholder="tabagent:…" />
+        <input id="external-code" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="K7P4M" aria-describedby="external-code-help" />
+        <p id="external-code-help">Short codes expire in 2 minutes and can be used once.</p>
         <p>Share this tab's page content with that agent and its configured model.</p>
         <label for="external-approval-mode">Approvals</label>
         <select id="external-approval-mode" aria-describedby="external-mode-help">

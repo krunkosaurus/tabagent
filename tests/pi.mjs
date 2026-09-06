@@ -4,13 +4,15 @@ import { randomUUID } from 'node:crypto';
 import { WebSocket } from 'ws';
 import { createPiFixture, until } from './pi-fixture.mjs';
 import { PiChat } from '../pi/chat.js';
-import { CHAT_THINKING_LIMIT, parsePairingCode, validateChatRequest, validateChatState } from '../build/mcp-tools.mjs';
+import { CHAT_THINKING_LIMIT, validateChatRequest, validateChatState } from '../build/mcp-tools.mjs';
+import { redeemPairing } from './pairing-client.mjs';
 
 const fixture = await createPiFixture();
 const peers = [];
 const deadline = setTimeout(() => { throw new Error('Pi integration tests timed out'); }, 60_000);
 async function pair(code, tabId) {
-  const { port, token } = parsePairingCode(code);
+  const credentials = await redeemPairing(code);
+  const { port, token } = credentials;
   const ws = new WebSocket(`ws://127.0.0.1:${port}/tabagent`, { origin: `chrome-extension://${'a'.repeat(32)}` });
   const messages = [];
   ws.on('message', (raw) => messages.push(JSON.parse(raw)));
@@ -20,7 +22,7 @@ async function pair(code, tabId) {
   const ready = await until(() => messages.find((m) => m.type === 'ready'), 'ready');
   ws.send(JSON.stringify({ type: 'share', tabId, url: 'https://example.com/', title: 'Fixture' }));
   await until(() => messages.find((m) => m.type === 'shared'), 'shared');
-  return { ws, messages, sessionId: ready.chatSessionId,
+  return { ws, messages, credentials, sessionId: ready.chatSessionId,
     state: () => messages.filter((m) => m.type === 'chat_state').at(-1)?.state,
     async request(action, text, overrides = {}) {
       const req = { type: 'chat_request', id: randomUUID(), sessionId: ready.chatSessionId, action, ...(text === undefined ? {} : { text }), ...overrides };
@@ -34,7 +36,7 @@ try {
   assert.equal(fixture.session.getAllTools().filter((t) => t.name.startsWith('tabagent_')).length, 14);
   const code = await fixture.code();
   const a = await pair(code, 101);
-  const b = await pair(code, 102);
+  const b = await pair(await fixture.code(), 102);
   assert.equal(a.state(), undefined, 'pairing alone never sends history');
   assert.equal((await a.request('attach')).error, undefined);
   assert.match(JSON.stringify(a.state()), /blue lighthouse/);
@@ -64,10 +66,13 @@ try {
   await a.request('send', 'Think before replying');
   await until(() => a.state()?.thinking?.active, 'thinking before any reply text');
   const thinkingId = a.state().thinking.id;
-  fixture.think(`\nKeep the code private: ${code.slice(0, -8)}\nLATEST_THOUGHT`);
+  const privateCode = `tabagent:${a.credentials.port}:${a.credentials.token}`;
+  const shortCode = await fixture.code();
+  fixture.think(`\nKeep the codes private: ${privateCode.slice(0, -8)} ${shortCode}\nLATEST_THOUGHT`);
   await until(() => a.state()?.thinking?.text.endsWith('LATEST_THOUGHT'), 'thinking deltas');
   assert.equal(a.state().thinking.id, thinkingId);
-  assert(!JSON.stringify(a.state()).includes(code.split(':')[2].slice(0, -8)), 'partial pairing tokens are redacted');
+  assert(!JSON.stringify(a.state()).includes(a.credentials.token.slice(0, -8)), 'partial pairing tokens are redacted');
+  assert(!JSON.stringify(a.state()).includes(shortCode), 'issued short codes are redacted');
   assert(!JSON.stringify(a.state().messages).includes('LATEST_THOUGHT'));
   assert.equal(b.state(), undefined, 'thinking is only sent to the attached tab');
   fixture.release();

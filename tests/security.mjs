@@ -30,8 +30,17 @@ try {
     export * from './src/background/plan-service';
     export * from './src/panel/markdown';
     export * from './src/providers/openai-compat';
+    export * from './src/shared/external-tools';
+    export * from './src/tools/browser-tools';
   `, resolveDir: process.cwd() }, bundle: true, platform: 'node', format: 'esm', outfile: output });
   const m = await import(pathToFileURL(output));
+  const browserTools = m.createBrowserToolRegistry();
+  assert.deepEqual(m.EXTERNAL_TOOLS.map((t) => t.name).sort(), browserTools.list().map((t) => t.info().name).sort());
+  for (const tool of m.EXTERNAL_TOOLS) {
+    assert.deepEqual(Object.keys(tool.parameters.properties).sort(), Object.keys(browserTools.get(tool.name).info().parameters.properties).sort(), `${tool.name}: MCP and native arguments must agree`);
+    assert.equal(tool.readonly, !!browserTools.get(tool.name).meta.readonly, `${tool.name}: MCP permissions must agree with the browser dispatcher`);
+  }
+  console.log('PASS: MCP/native browser tool names, argument keys and mutation classifications agree');
   await m.initStorageAccess();
   assert.deepEqual(levels.sort(), [['local', 'TRUSTED_CONTEXTS'], ['session', 'TRUSTED_CONTEXTS']]);
   assert(!local.has('agent.session.legacy'));

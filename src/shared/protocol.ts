@@ -13,12 +13,16 @@
 
 import type { Model, PlanStep, ProviderDefinition, QueuedMessage, Session, SessionState, StreamPart, SuggestedAction } from "../core/types";
 import type { UserFact, UserFactCategory } from "../core/storage";
+import type { ExternalState } from "./external-tools";
 
 // ---------------------------------------------------------------------------
 // side panel -> SW
 // ---------------------------------------------------------------------------
 
 export type PanelRequest =
+  | { kind: "external_connect"; code: string }
+  | { kind: "external_stop" }
+  | { kind: "external_decision"; id: string; allow: boolean }
   | { kind: "connect_provider"; providerId: string; credentials: Record<string, string>; keepSavedKey?: boolean }
   | { kind: "get_provider_connection"; providerId: string }
   | { kind: "validate_token"; providerId: string; credentials: Record<string, string> }
@@ -61,6 +65,7 @@ export type PermissionDecision =
 // ---------------------------------------------------------------------------
 
 export type PanelEvent =
+  | { kind: "external_state"; tabId: number; external: ExternalState }
   | { kind: "selection_draft"; tabId: number }
   | { kind: "session_state"; session: Session }
   | { kind: "stream_part"; sessionId: string; part: StreamPart }

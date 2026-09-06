@@ -32,10 +32,14 @@ Follow the [installation instructions](#installation) below to build it and load
 ![Chrome 120+](https://img.shields.io/badge/Chrome-120%2B-4285F4?logo=googlechrome&logoColor=white)
 ![Manifest V3](https://img.shields.io/badge/Manifest-V3-34A853)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)
-![Zero runtime dependencies](https://img.shields.io/badge/runtime%20deps-0-brightgreen)
+![Zero extension runtime dependencies](https://img.shields.io/badge/extension%20runtime%20deps-0-brightgreen)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow)
 
 TabAgent is a Manifest V3 Chrome extension that lets any OpenAI-compatible LLM drive the active tab through the Chrome DevTools Protocol. Connect a provider — **Z.AI's coding plan is the first-class default** — give the agent a goal in the side panel, and it works the page through 11 structured browser tools. Everything is hand-rolled with zero runtime dependencies: SSE streaming, markdown rendering, and WebCrypto encryption included.
+
+The extension can also give **local Codex, Hermes, and other MCP clients** browser
+tools through a local companion process. The companion uses the official MCP SDK
+and `ws`; these dependencies are not bundled into the Chrome extension.
 
 ## Demo
 
@@ -43,6 +47,7 @@ https://github.com/user-attachments/assets/2adfd956-d6e8-4b5c-893d-dc04f92abe66
 
 ## Features
 
+- **Local-agent MCP bridge** — pair Codex or Hermes from the sidebar, share specific tabs, and approve actions there. Each session sees only its shared tabs; Stop revokes access. See [local agents](#local-agents-codex-hermes-and-mcp).
 - **Any OpenAI-compatible provider** — Z.AI, Zhipu/BigModel, OpenAI, OpenRouter, DeepSeek, Groq, xAI (Grok), Mistral, Fireworks, Cerebras, Moonshot (Kimi), Hugging Face, or any custom endpoint (Ollama, LM Studio, …) through a single adapter
 - **11 CDP browser tools** — snapshot, click, type, scroll, hover, key presses, screenshots, text extraction, and more (see [Browser tools](#browser-tools))
 - **Resumable agent loop** — memory-only checkpoints survive service-worker restarts; conversations are cleared when Chrome exits
@@ -75,7 +80,7 @@ npm run build
 
 To edit the current connection, click **Edit connection** directly below the
 panel header. The version beside it identifies the loaded build (currently
-**v0.1.8**). To edit another saved provider, open the provider picker and use its
+**v0.2.0**). To edit another saved provider, open the provider picker and use its
 **Edit connection** button. Change the base URL or API key
 and click **Save changes**. An empty key field keeps the existing key when the
 server address is unchanged. For a different address, explicitly enter that
@@ -102,6 +107,71 @@ Chrome exits, or the extension is reloaded or updated. Export a conversation
 explicitly if you want to retain it. On upgrade, this build removes old disk
 checkpoint mirrors; export anything you need with the previous build first.
 Credentials, settings, site grants and manually saved notes still persist locally.
+
+## Local agents: Codex, Hermes and MCP
+
+Build the repository and load/reload `dist/` in Chrome using the installation
+steps above. The companion needs Node.js 22+. It runs on the same computer as
+Chrome; your agent's model endpoint can be on your own hardware elsewhere.
+
+Register it in Codex (replace `/absolute/path/tabagent` with your checkout):
+
+```sh
+codex mcp add tabagent -- node /absolute/path/tabagent/mcp/server.mjs
+```
+
+For a desktop client, use an absolute path to your Node executable if `node`
+is not on its PATH. Allow time for sidebar approvals by adding
+`tool_timeout_sec = 120` to the `[mcp_servers.tabagent]` table in
+`~/.codex/config.toml`. Start a fresh Codex session and check `/mcp`. Tool
+descriptions and MCP server instructions explain pairing and usage automatically;
+an extra skill is not required.
+
+For Hermes, add this entry under the existing `mcp_servers` mapping in
+`~/.hermes/config.yaml`, preserving other servers:
+
+```yaml
+mcp_servers:
+  tabagent:
+    command: node
+    args: ["/absolute/path/tabagent/mcp/server.mjs"]
+    timeout: 120
+```
+
+Start a fresh Hermes session with this MCP toolset enabled. Each client launches
+its own companion over **stdio**. Do not start `npm run mcp` as a separate daemon:
+the client must own the process and its stdin/stdout.
+
+1. Tell your agent: **“Use TabAgent to inspect my browser tab.”**
+2. The agent calls `tabagent_connect` and gives you a session-only pairing code.
+3. Open TabAgent on the intended HTTP(S) page. Expand **Local agent**, paste the
+   code, and click **Share this tab**. Accept Chrome's local connection permission.
+4. Give the task in Codex or Hermes. The agent lists shared tabs with
+   `tabagent_tabs`, then uses `tabagent_snapshot` and the other browser tools.
+5. Approve or deny actions in the sidebar. **Stop sharing** or the Stop button
+   revokes the connection, including pending approvals.
+
+You can share several tabs with one agent by repeating step 3 with its code.
+Codex and Hermes can work on different tabs concurrently. A tab has one owner;
+stop sharing before giving it to another agent or using TabAgent's own chat.
+Keep pairing codes in your agent conversation and the extension UI, never in
+webpage content. Restarting the agent, reloading the extension, closing the tab,
+or stopping its debugger requires pairing again. Connections do not auto-resume.
+
+External agents **always ask before page mutations and navigation**, regardless
+of standalone Auto mode or saved site grants. Sharing initially authorizes reads
+of that origin; a new origin asks again before page content is returned. An
+unanswered tool call expires after 90 seconds and revokes that tab's access.
+Already-dispatched browser actions cannot be undone by Stop.
+
+The bridge supplies text snapshots and standard MCP image results. Inference is
+controlled by the calling agent, not by TabAgent's provider picker. Configure
+Hermes's image-analysis route to your local vision model as needed; Hermes may
+materialize MCP images as local `MEDIA:` files for its vision tools. Codex and
+Hermes can retain tool results in their own histories/caches. The companion and
+extension do not persist pairing secrets or external-session page results.
+
+See [MCP architecture and security](docs/mcp.md) for the protocol and tests.
 
 ## Providers
 
@@ -169,7 +239,7 @@ The loop (`src/background/loop.ts`) checkpoints progress during a run. Recovery 
 
 The debugger attaches when a run starts and detaches when it finishes. While attached, it also keeps the service worker alive for the duration of the run (Chrome 118+ behavior).
 
-There are no runtime dependencies: SSE parsing, markdown rendering, and crypto are implemented in-repo, and the UI is vanilla TypeScript.
+The Chrome extension has no runtime dependencies: SSE parsing, markdown rendering, and crypto are implemented in-repo, and the UI is vanilla TypeScript. The optional local MCP companion uses the official MCP SDK and `ws`.
 
 See [the tab-instance architecture](docs/architecture.md) for panel ownership,
 state restoration, concurrent runs and tab cleanup.
@@ -201,7 +271,7 @@ See [SECURITY.md](SECURITY.md) for findings, validation and limits.
 - **Anthropic native adapter** is a stub (use OpenRouter for Claude); **no Gemini adapter**
 - **Pause is cancel** — true mid-run pause/resume is not implemented yet
 - **No cost tracking** — the default Z.AI plan is flat-rate; per-token accounting is absent elsewhere
-- **One tab per agent** — independent tabs can run concurrently; a single agent cannot orchestrate multiple tabs
+- **One tab per standalone agent** — independent tabs can run concurrently. External MCP agents can orchestrate multiple explicitly shared tabs.
 - **Offscreen streaming path** is implemented but dormant; the loop currently streams inside the service worker (safe because the attached debugger keeps it alive)
 - **No prompt-injection classifier** (see [Security & privacy](#security--privacy))
 - **Vanilla TS UI** — no framework

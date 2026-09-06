@@ -146,7 +146,7 @@ export async function isAttached(tabId: number): Promise<boolean> {
  * Send a single CDP command (one attempt) wrapped in a per-command timeout.
  * Throws on CDP error or timeout. Must be called only while attached.
  */
-async function sendCommandOnce<T>(
+export async function sendCommandOnce<T = unknown>(
   tabId: number,
   method: string,
   params?: unknown,

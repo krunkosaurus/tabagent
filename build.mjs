@@ -76,6 +76,14 @@ try {
     )
   );
 
+  // Node-only MCP companion shares its validated tool contract with the extension.
+  // Keep this outside dist: only Chrome assets belong in the extension archive.
+  await esbuild.build({
+    entryPoints: [join(SRC, "shared/external-tools.ts")],
+    outfile: join(ROOT, "build/mcp-tools.mjs"),
+    bundle: true, platform: "node", target: "node22", format: "esm",
+  });
+
   // Manifest is generated so the package version stays in sync. esbuild
   // transforms manifest.ts -> JS first, so the build works on any Node >= 18
   // (native dynamic import() of .ts only exists on Node 23.6+, which CI and

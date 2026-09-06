@@ -8,11 +8,9 @@ I've been looking for the best open-source replacement for Claude's Chrome exten
 
 It impressed me more than several GitHub projects with far more stars. When I found it, the original project had **zero stars**, yet it was already a capable browser agent built as an alternative to Claude's browser extension.
 
-I forked it to strengthen its security and fill in gaps I found while using it:
-
-- **Security and privacy improvements** — tighter permissions, safer provider connections, and stronger isolation between web pages and extension controls. See the [security review](SECURITY.md) for the changes and remaining limitations.
-- **An independent instance in each tab** — conversations, drafts, model choices, and approvals stay with their tab when you switch between pages.
-- **Editable custom model connections** — update a saved endpoint or API key, and choose among the models your server provides.
+I forked it to strengthen its security, give each tab an independent instance,
+and let my local **Codex, Hermes and Pi** agents use it as their browser tool.
+See [what changed from the original](#whats-changed-from-the-original) below.
 
 I'm using it successfully with **DeepSeek V4 Flash Vision running locally on my dual Sparks**. That's the setup I'm building this fork around: a useful browser agent powered by models I run myself.
 
@@ -37,9 +35,38 @@ Follow the [installation instructions](#installation) below to build it and load
 
 TabAgent is a Manifest V3 Chrome extension that lets any OpenAI-compatible LLM drive the active tab through the Chrome DevTools Protocol. Connect a provider — **Z.AI's coding plan is the first-class default** — give the agent a goal in the side panel, and it works the page through 11 structured browser tools. Everything is hand-rolled with zero runtime dependencies: SSE streaming, markdown rendering, and WebCrypto encryption included.
 
-The extension can also give **local Codex, Hermes, and other MCP clients** browser
+The extension can also give **local Codex, Hermes, Pi and other MCP clients** browser
 tools through a local companion process. The companion uses the official MCP SDK
 and `ws`; these dependencies are not bundled into the Chrome extension.
+
+## What's changed from the original
+
+This comparison uses the original project's
+[v0.1.6 source](https://github.com/binSaed/tabagent/tree/06d65d136b0ae3703b55542294055d02a09cc8e5)
+as the baseline. The original supplies the OpenAI-compatible provider adapter,
+11 browser tools, standalone agent loop, translation skill and chat UI.
+These are the changes I've added in this fork through **v0.2.2**:
+
+| Area | Original v0.1.6 | This fork |
+| --- | --- | --- |
+| **Local agent integration** | Tasks run through the extension's own chat and model connection. | An MCP companion lets Codex, Hermes, Pi (with an MCP adapter), and other MCP clients use the 11 browser tools, plus tools to pair, list shared tabs and disconnect. The calling agent chooses its model and vision route. |
+| **Independent tabs** | A global side panel targets the active tab when opened. | Each tab owns its panel, conversation, draft, model choice and approvals. Runs stay on their original tab. External agents can control multiple explicitly shared tabs, with one owner per tab. |
+| **Connection approvals** | Standalone Ask/Auto modes and site grants. | External connections have their own **Ask before each action** or **Allow for this connection** setting. The latter permits actions, submissions and new sites on that shared tab until disconnect; re-pairing defaults to Ask. Added in **v0.2.1**. |
+| **Visible external activity** | The chat UI reports the extension's own agent loop. | The main panel shows incoming browser actions, approval waits, completed steps, errors and elapsed time. It restores the latest 50 summaries during the connection and says when it is waiting for the calling agent. Added in **v0.2.2**. |
+| **Custom model connections** | Custom endpoints are supported, but saved connections have no editor and live model selection has gaps. | Edit saved endpoints and keys, retain discovered model choices, and request host permission before validation. Changing the server requires an explicit key choice. |
+| **Vision and tool history** | Screenshot bytes can be replaced before inference; tool results can lack matching calls. | Preserve assistant tool calls, deliver screenshots as images to compatible vision models, and return standard MCP image results to external agents. |
+| **Privacy and saved notes** | Conversation checkpoints are mirrored to disk; models can write memories and trigger automatic extraction. | Keep conversations and drafts in browser-session memory, remove old checkpoint mirrors, and use manually edited notes. Selection actions fill a draft for the user to send. |
+| **Security boundaries** | Page/extension messages, storage, HTML rendering, provider URLs and approval checks needed hardening. | Restrict privileged senders and storage access, render untrusted fields as text, isolate DOM tools, tighten origin/action checks and provider requests, and remove broad content-script injection and unused permissions. |
+| **Regression coverage** | CI builds the extension. | CI also runs type checks, security and MCP tests, and real-browser tests for tab isolation, approvals, image delivery, activity restoration and revocation. |
+
+The MCP connection is local and requires you to open TabAgent on the intended
+tab and share it with a session pairing code. **Stop sharing** revokes access;
+the agent cannot silently enable the extension on other tabs. The activity view
+reports browser calls; the agent's conversation stays in its own client.
+
+See the [security findings and remaining limits](SECURITY.md),
+[tab-instance architecture](docs/architecture.md), and
+[MCP architecture and tests](docs/mcp.md) for the implementation details.
 
 ## Demo
 
@@ -47,7 +74,8 @@ https://github.com/user-attachments/assets/2adfd956-d6e8-4b5c-893d-dc04f92abe66
 
 ## Features
 
-- **Local-agent MCP bridge** — pair Codex, Hermes or Pi from the sidebar, share specific tabs, and choose to approve each action or allow the connection once. Each session sees only its shared tabs; Stop revokes access. See [local agents](#local-agents-codex-hermes-and-mcp).
+- **Local-agent MCP bridge** — pair Codex, Hermes or Pi from the sidebar, share specific tabs, and choose to approve each action or allow the connection once. Each session sees only its shared tabs; Stop revokes access. See [local agents](#local-agents-codex-hermes-pi-and-mcp).
+- **Live browser activity** — connected agents get a main activity view showing current actions, approvals, completed steps, errors and timings, with an explicit waiting state between browser calls.
 - **Any OpenAI-compatible provider** — Z.AI, Zhipu/BigModel, OpenAI, OpenRouter, DeepSeek, Groq, xAI (Grok), Mistral, Fireworks, Cerebras, Moonshot (Kimi), Hugging Face, or any custom endpoint (Ollama, LM Studio, …) through a single adapter
 - **11 CDP browser tools** — snapshot, click, type, scroll, hover, key presses, screenshots, text extraction, and more (see [Browser tools](#browser-tools))
 - **Resumable agent loop** — memory-only checkpoints survive service-worker restarts; conversations are cleared when Chrome exits
@@ -108,7 +136,7 @@ explicitly if you want to retain it. On upgrade, this build removes old disk
 checkpoint mirrors; export anything you need with the previous build first.
 Credentials, settings, site grants and manually saved notes still persist locally.
 
-## Local agents: Codex, Hermes and MCP
+## Local agents: Codex, Hermes, Pi and MCP
 
 Build the repository and load/reload `dist/` in Chrome using the installation
 steps above. The companion needs Node.js 22+. It runs on the same computer as
@@ -138,16 +166,47 @@ mcp_servers:
     timeout: 120
 ```
 
-Start a fresh Hermes session with this MCP toolset enabled. Each client launches
-its own companion over **stdio**. Do not start `npm run mcp` as a separate daemon:
-the client must own the process and its stdin/stdout.
+Start a fresh Hermes session with this MCP toolset enabled.
+
+For **Pi**, install the MCP adapter (tested with version **2.32.1**):
+
+```sh
+pi install npm:pi-mcp-adapter@2.32.1
+```
+
+Add the following server to `~/.pi/agent/mcp.json`, preserving any existing
+settings and servers. Replace both absolute paths for your machine:
+
+```json
+{
+  "mcpServers": {
+    "tabagent": {
+      "command": "/absolute/path/to/node",
+      "args": ["/absolute/path/tabagent/mcp/server.mjs"],
+      "lifecycle": "lazy-keep-alive",
+      "requestTimeoutMs": 120000,
+      "directTools": true,
+      "toolPrefix": "none"
+    }
+  }
+}
+```
+
+Restart Pi and check `/mcp`. The adapter exposes the `tabagent_*` tools directly;
+`lazy-keep-alive` keeps the companion available after its first call so an idle
+timeout does not end your pairing. Configure the model in Pi as usual.
+If the tools have not appeared yet, run `/mcp reconnect tabagent` to refresh
+discovery.
+
+Each client launches its own companion over **stdio**. Do not start `npm run mcp`
+as a separate daemon: the client must own the process and its stdin/stdout.
 
 1. Tell your agent: **“Use TabAgent to inspect my browser tab.”**
 2. The agent calls `tabagent_connect` and gives you a session-only pairing code.
 3. Open TabAgent on the intended HTTP(S) page. Expand **Local agent**, paste the
    code, and choose **Ask before each action** or **Allow for this connection**.
    Click **Share this tab** and accept Chrome's local connection permission.
-4. Give the task in Codex or Hermes. The agent lists shared tabs with
+4. Give the task in Codex, Hermes or Pi. The agent lists shared tabs with
    `tabagent_tabs`, then uses `tabagent_snapshot` and the other browser tools.
 5. In Ask mode, approve or deny actions in the sidebar. You can also click
    **Allow for this connection** on an approval prompt to continue without
@@ -162,7 +221,7 @@ Pi, Codex or Hermes; this view shows their browser calls. After sharing ends,
 the open panel keeps the outcome visible until you reconnect or return to chat.
 
 You can share several tabs with one agent by repeating step 3 with its code.
-Codex and Hermes can work on different tabs concurrently. A tab has one owner;
+Codex, Hermes and Pi can work on different tabs concurrently. A tab has one owner;
 stop sharing before giving it to another agent or using TabAgent's own chat.
 Isolation follows the MCP connection: a client that reuses one companion across
 conversations also shares its paired tabs across them. Use separate client

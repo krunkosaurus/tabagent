@@ -194,11 +194,18 @@ export async function cdp<T = unknown>(tabId: number, method: string, params?: u
 // High-level CDP helpers used by the browser tools
 // ---------------------------------------------------------------------------
 
-/** Enable the domains we need (called once after attach). */
-export async function enableDomains(tabId: number): Promise<void> {
-  await Promise.all([
-    cdp(tabId, "Page.enable"),
-    cdp(tabId, "Runtime.enable"),
-    cdp(tabId, "DOM.enable"),
-  ]);
+/** Initialize an attached session. The sender never needs to reattach here;
+ * external connections supply their own ownership/revocation-checked sender. */
+export async function enableDomains(
+  tabId: number,
+  send: (method: string, params?: unknown) => Promise<unknown> = (method, params) => sendCommandOnce(tabId, method, params),
+): Promise<void> {
+  await send("Page.enable");
+  await send("Runtime.enable");
+  await send("DOM.enable");
+  // Chrome pauses rendering/scroll events in hidden tabs even while Runtime
+  // commands can change scrollTop. Wheel acknowledgements can then stall too.
+  // Keep this page rendering without activating its tab/window. Chrome releases
+  // the emulation's rendering keepalive when this debugger session detaches.
+  await send("Emulation.setFocusEmulationEnabled", { enabled: true });
 }

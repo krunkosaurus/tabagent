@@ -3,7 +3,7 @@
  * MCP client cannot bypass them. Never reconnect or replay a cancelled action.
  */
 import { createBrowserToolRegistry } from "../tools/browser-tools";
-import { sendCommandOnce } from "../tools/cdp";
+import { enableDomains, sendCommandOnce } from "../tools/cdp";
 import { isExtensionPage, webURL } from "../core/security";
 import { panelTabId } from "../shared/panel-target";
 import { redeemPairingCode } from "./pairing";
@@ -266,9 +266,7 @@ export const externalAgent = {
             await chrome.debugger.attach({ tabId }, "1.3");
             s.attached = true;
             alive(s);
-            await raw(s, "Page.enable");
-            await raw(s, "Runtime.enable");
-            await raw(s, "DOM.enable");
+            await enableDomains(tabId, (method, params) => raw(s, method, params));
             const current = await page(s);
             const tab = await chrome.tabs.get(tabId);
             await checkOrigin(s, current.origin);

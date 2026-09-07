@@ -283,17 +283,29 @@ export function estimateSnapshotTokens(snapshot: string): number {
 // strategy production browser agents converged on.
 // ===========================================================================
 
+export interface DomWalkState {
+  visibility: string;
+  readyState: string;
+  scroll: { x: number; y: number; maxX: number; maxY: number };
+}
+
 /** Render a flat DOM-walk list as the YAML-ish string the LLM consumes. */
 export function renderDomWalk(
   nodes: DomWalkNode[],
   url: string,
   title: string,
   viewport?: { width: number; height: number },
+  state?: DomWalkState,
 ): string {
   const lines: string[] = [];
   lines.push(`- Page URL: ${url}`);
   lines.push(`- Page Title: ${title}`);
   if (viewport) lines.push(`- Viewport: ${viewport.width}x${viewport.height}`);
+  if (state) {
+    lines.push(`- Page state: visibility=${state.visibility}; ready=${state.readyState}`);
+    lines.push(`- Document scroll: (${state.scroll.x}, ${state.scroll.y}); maximum (${state.scroll.maxX}, ${state.scroll.maxY})`);
+    if (state.visibility === "hidden") lines.push("- Rendering may be paused while this page is hidden; a changed scroll position does not confirm updated content.");
+  }
   lines.push("- Page Snapshot");
   lines.push("```yaml");
   for (const n of nodes) {

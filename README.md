@@ -281,6 +281,11 @@ CDP is required for capabilities a content script cannot provide:
 - **Full-page screenshots** beyond the viewport
 - **Service-worker keepalive** during long runs
 
+While attached, TabAgent keeps the shared page rendering even in a background
+tab, without switching tabs or focusing the browser window. Chrome releases
+this rendering keepalive when sharing stops or the standalone run detaches.
+This lets virtualized feeds, wheel input and screenshots work in background tabs.
+
 ## Security & privacy
 
 - No analytics SDK, telemetry collector, or developer-owned relay was found in the reviewed source. Optional application attribution headers have been removed.

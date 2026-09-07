@@ -239,6 +239,12 @@ the agent's conversation and model inference remain in its own client.
 
 ### Scrolling long pages
 
+Shared tabs keep rendering in the background without switching tabs or focusing
+the browser window. This lasts only for the debugger attachment. Older builds
+could change a background tab's scroll position while Chrome paused scroll
+events and feed rendering; wheel input could then time out. After updating the
+extension, reload it in `chrome://extensions` and pair again to enable the fix.
+
 `tabagent_scroll` uses **DOM scrolling** by default: it moves the document's
 scroll position and reports the actual change, without waiting for mouse-wheel
 input. If the document has no scroll range, it uses a scrollable area at the
@@ -246,6 +252,10 @@ viewport center. Pass a snapshot `ref` to choose its nearest scrollable containe
 For virtualized feeds, use modest `amount` values and take a fresh snapshot after
 each scroll; only the currently rendered content is available. A result showing
 no movement does not prove that the full feed has been collected.
+Scroll results identify the target, its position and maximum scroll range;
+snapshots include page visibility, loading state and document scroll position.
+Check for new content, not just a changed position. A stale `ref` requires a fresh
+snapshot because virtualized pages replace elements as you scroll.
 
 For controls that specifically need wheel events, use `method: "wheel"`.
 Wheel input targets the viewport center or the visible portion of the supplied

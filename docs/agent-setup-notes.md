@@ -37,6 +37,9 @@ existing file instead of replacing it.
   Supply a `ref` inside a nested scroll container when needed. Use modest steps
   and fresh snapshots for virtualized feeds; zero movement does not establish
   a complete archive. `method: "wheel"` is available for wheel-specific controls.
+  Shared tabs keep rendering in the background while attached. Scroll results
+  identify the target and its limits; snapshots report visibility and document
+  position. Verify new content rather than inferring progress from coordinates.
 - The user controls approval: **Ask before each action** is the default;
   mutations, navigation and reads of new origins require sidebar approval.
   **Allow for this connection** permits those actions on that shared tab until

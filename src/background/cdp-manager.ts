@@ -31,7 +31,12 @@ class CdpManager {
     // attach() is idempotent and dedupes concurrent calls; cdp() will re-enable
     // domains transparently on any auto-reattach, so we only enable here once.
     await attach(tabId);
-    await enableDomains(tabId);
+    try {
+      await enableDomains(tabId);
+    } catch (error) {
+      await detach(tabId);
+      throw error;
+    }
     this.attachedTabs.add(tabId);
   }
 

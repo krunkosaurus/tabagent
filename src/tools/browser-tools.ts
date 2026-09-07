@@ -18,7 +18,7 @@ import { webURL } from "../core/security";
  */
 
 import type { ToolCall, ToolResult } from "../core/types";
-import { renderDomWalk, type DomWalkNode } from "../core/format";
+import { renderDomWalk, type DomWalkNode, type DomWalkState } from "../core/format";
 import { err, ok, parseInput, type AnnotatedTool, type ToolContext } from "./tool";
 import { dialogHandler } from "../background/dialog-handler";
 import { validateExternalTool } from "../shared/external-tools";
@@ -292,7 +292,19 @@ const WALKER_JS = String.raw`
     if (!window.__agentRefMap[key].deref()) delete window.__agentRefMap[key];
   }
 
-  return { nodes: out, viewport: { width: window.innerWidth, height: window.innerHeight } };
+  var root = document.scrollingElement;
+  return {
+    nodes: out,
+    viewport: { width: window.innerWidth, height: window.innerHeight },
+    state: {
+      visibility: document.visibilityState, readyState: document.readyState,
+      scroll: {
+        x: window.scrollX, y: window.scrollY,
+        maxX: root ? Math.max(0, root.scrollWidth - root.clientWidth) : 0,
+        maxY: root ? Math.max(0, root.scrollHeight - root.clientHeight) : 0
+      }
+    }
+  };
 })();
 `;
 
@@ -314,7 +326,7 @@ class SnapshotTool implements AnnotatedTool {
       const url = urlRes?.result?.value ?? "";
       const title = titleRes?.result?.value ?? "";
 
-      const walkRes = await ctx.cdp<{ result: { value: { nodes: DomWalkNode[]; viewport: { width: number; height: number } } } }>("Runtime.evaluate", {
+      const walkRes = await ctx.cdp<{ result: { value: { nodes: DomWalkNode[]; viewport: { width: number; height: number }; state: DomWalkState } } }>("Runtime.evaluate", {
         expression: WALKER_JS,
         returnByValue: true,
         awaitPromise: false,
@@ -323,7 +335,7 @@ class SnapshotTool implements AnnotatedTool {
       if (!walkValue || !Array.isArray(walkValue.nodes)) {
         return err(_call, "snapshot failed: DOM walk returned no nodes (the page may be still loading)");
       }
-      const yaml = renderDomWalk(walkValue.nodes, url, title, walkValue.viewport);
+      const yaml = renderDomWalk(walkValue.nodes, url, title, walkValue.viewport, walkValue.state);
       // Refs now live in window.__agentRefMap (WeakRef store); no backend map.
       return ok(_call, yaml, { nodeCount: walkValue.nodes.length });
     } catch (e) {
@@ -595,7 +607,8 @@ const SCROLL_INFO = {
 
 // Runs in the caller's isolated world. Only validated values are interpolated;
 // no page-provided code is evaluated. DOM scrolling also works when the wheel
-// input queue is stalled, and emits normal scroll events for virtualized feeds.
+// input queue is stalled. Scroll events and virtualized feeds also need the
+// rendering keepalive established by the debugger session's enableDomains().
 const SCROLL_JS = String.raw`
 (function (ref, deltaX, deltaY, method) {
   var root = document.scrollingElement;
@@ -650,11 +663,17 @@ const SCROLL_JS = String.raw`
   var before = { x: el.scrollLeft, y: el.scrollTop };
   // Instant avoids waiting for rAF/smooth animations in background tabs.
   el.scrollBy({ left: deltaX, top: deltaY, behavior: "instant" });
-  return { before: before, after: { x: el.scrollLeft, y: el.scrollTop } };
+  return {
+    before: before, after: { x: el.scrollLeft, y: el.scrollTop },
+    target: el === root ? "document" : el.localName + (el.id ? "#" + el.id.slice(0, 80) : ""),
+    maximum: { x: Math.max(0, el.scrollWidth - el.clientWidth), y: Math.max(0, el.scrollHeight - el.clientHeight) },
+    visibility: document.visibilityState
+  };
 })`;
 
 type ScrollProbe = { error: string } | { x: number; y: number } | {
   before: { x: number; y: number }; after: { x: number; y: number };
+  target: string; maximum: { x: number; y: number }; visibility: string;
 };
 
 class ScrollTool implements AnnotatedTool {
@@ -690,7 +709,9 @@ class ScrollTool implements AnnotatedTool {
       const movement = dx !== 0 || dy !== 0
         ? `scrolled ${direction}; actual delta (${dx}, ${dy})px`
         : "no movement; target may be at a scroll boundary or not scrollable";
-      return ok(call, `${movement}; requested ${amount}px; position (${value.after.x}, ${value.after.y}).`, value);
+      return ok(call, `${movement}; requested ${amount}px; position (${value.after.x}, ${value.after.y}); ` +
+        `maximum (${value.maximum.x}, ${value.maximum.y}); target ${JSON.stringify(value.target)}; page visibility=${value.visibility}. ` +
+        "Call snapshot() to verify updated content.", value);
     } catch (e) {
       if (e instanceof CdpCommandTimeoutError && e.method === "Input.dispatchMouseEvent") {
         return err(call, "wheel scroll timed out; completion is unknown. Do not repeat the wheel input automatically. " +

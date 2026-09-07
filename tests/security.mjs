@@ -31,6 +31,7 @@ try {
     export * from './src/providers/openai-compat';
     export * from './src/shared/external-tools';
     export * from './src/tools/browser-tools';
+    export * from './src/tools/cdp';
   `, resolveDir: process.cwd() }, bundle: true, platform: 'node', format: 'esm', outfile: output });
   const m = await import(pathToFileURL(output));
   const browserTools = m.createBrowserToolRegistry();
@@ -40,6 +41,46 @@ try {
     assert.equal(tool.readonly, !!browserTools.get(tool.name).meta.readonly, `${tool.name}: MCP permissions must agree with the browser dispatcher`);
   }
   console.log('PASS: MCP/native browser tool names, argument keys and mutation classifications agree');
+  const noInput = { tabId: 7, cdp: async () => { throw new Error('unexpected CDP dispatch'); } };
+  for (const input of [
+    {amount: -1}, {amount: 100_001}, {amount: NaN}, {amount: Infinity}, {amount: '400'},
+    {direction: 'diagonal'}, {method: 'auto'}, {ref: 'x'.repeat(129)}, {expression: 'page code'},
+  ]) {
+    const result = await browserTools.get('scroll').run({id: 'invalid-scroll', name: 'scroll', input}, noInput);
+    assert(result.isError);
+    assert(!result.content.includes('unexpected CDP dispatch'), result.content);
+  }
+  const zero = await browserTools.get('scroll').run({id: 'zero', name: 'scroll', input: {amount: 0, method: 'wheel'}}, noInput);
+  assert(!zero.isError, zero.content);
+  const realTimer = globalThis.setTimeout;
+  const originalDebugger = chrome.debugger;
+  try {
+    globalThis.setTimeout = (fn, ms, ...args) => realTimer(fn, ms === 20_000 ? 0 : ms, ...args);
+    let attempts = 0;
+    let lateCallback;
+    chrome.debugger = {sendCommand(_target, _method, _params, callback) { attempts++; lateCallback = callback; }};
+    const failure = await m.cdp(7, 'Input.dispatchMouseEvent', {type: 'mouseWheel'}).catch(error => error);
+    assert(failure instanceof m.CdpCommandTimeoutError);
+    assert.equal(failure.method, 'Input.dispatchMouseEvent');
+    assert.match(failure.message, /completion is unknown/);
+    assert.doesNotMatch(failure.message, /frozen|reload|restart/i);
+    assert.equal(attempts, 1, 'an unknown input result must not be retried');
+    let lateErrorReads = 0;
+    Object.defineProperty(chrome.runtime, 'lastError', {configurable: true, get() {
+      lateErrorReads++;
+      return {message: 'detached while handling command'};
+    }});
+    lateCallback();
+    assert.equal(lateErrorReads, 1, 'late Chrome errors must still be consumed');
+    delete chrome.runtime.lastError;
+    chrome.debugger.sendCommand = (_target, _method, _params, callback) => callback({alive: true});
+    assert.deepEqual(await m.sendCommandOnce(7, 'Runtime.evaluate', {}), {alive: true});
+  } finally {
+    delete chrome.runtime.lastError;
+    chrome.debugger = originalDebugger;
+    globalThis.setTimeout = realTimer;
+  }
+  console.log('PASS: scroll validates before input; CDP timeouts preserve unknown completion, never retry input and consume late errors');
   await m.initStorageAccess();
   assert.deepEqual(levels.sort(), [['local', 'TRUSTED_CONTEXTS'], ['session', 'TRUSTED_CONTEXTS']]);
   assert(!local.has('agent.session.legacy'));

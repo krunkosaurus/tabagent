@@ -21,6 +21,8 @@ import type { ToolCall, ToolResult } from "../core/types";
 import { renderDomWalk, type DomWalkNode } from "../core/format";
 import { err, ok, parseInput, type AnnotatedTool, type ToolContext } from "./tool";
 import { dialogHandler } from "../background/dialog-handler";
+import { validateExternalTool } from "../shared/external-tools";
+import { CdpCommandTimeoutError } from "./cdp";
 
 // ===========================================================================
 // snapshot -- the page-state representation the LLM reasons over
@@ -578,14 +580,81 @@ class NavigateTool implements AnnotatedTool {
 const SCROLL_INFO = {
   name: "scroll",
   description:
-    "Scroll the page up/down/left/right by a number of pixels (approximate; one scroll notch is about 100px). Useful for reaching off-screen elements before snapshotting. Prefer scroll_to when you have a target ref.",
+    "Scroll the document by pixels and report actual movement. If the document has no scroll range, use the scrollable area at the viewport center. Optionally target the scrollable ancestor of a snapshot ref. Uses DOM scrolling by default. Use method 'wheel' for controls requiring wheel events; its completion does not confirm movement. Snapshot afterwards for newly loaded content; use scroll_to to reveal a particular ref.",
   parameters: {
     type: "object",
+    additionalProperties: false,
     properties: {
       direction: { type: "string", enum: ["up", "down", "left", "right"], description: "Default down." },
-      amount: { type: "number", description: "Pixels to scroll. Default 400." },
+      amount: { type: "number", minimum: 0, maximum: 100_000, description: "Pixels to scroll. Default 400; actual movement may be smaller at a boundary." },
+      ref: { type: "string", maxLength: 128, description: "Optional snapshot ref inside the intended scroll container; for wheel input, the visible element to aim at." },
+      method: { type: "string", enum: ["dom", "wheel"], description: "Default dom. Wheel is for controls that require actual wheel input." },
     },
   },
+};
+
+// Runs in the caller's isolated world. Only validated values are interpolated;
+// no page-provided code is evaluated. DOM scrolling also works when the wheel
+// input queue is stalled, and emits normal scroll events for virtualized feeds.
+const SCROLL_JS = String.raw`
+(function (ref, deltaX, deltaY, method) {
+  var root = document.scrollingElement;
+  if (!root) return { error: "page has no scrolling element" };
+  var el = root;
+  if (ref) {
+    var w = window.__agentRefMap && window.__agentRefMap[ref];
+    el = w && w.deref();
+    if (!el || !el.isConnected || el.ownerDocument !== document) {
+      return { error: "ref is no longer on this page. Call snapshot() to refresh refs." };
+    }
+  }
+  if (method === "wheel") {
+    var width = window.innerWidth, height = window.innerHeight;
+    if (width <= 0 || height <= 0) return { error: "page has no visible viewport" };
+    var x = width / 2, y = height / 2;
+    if (ref) {
+      var rect = el.getBoundingClientRect();
+      var left = Math.max(0, rect.left), right = Math.min(width, rect.right);
+      var top = Math.max(0, rect.top), bottom = Math.min(height, rect.bottom);
+      if (right <= left || bottom <= top) {
+        return { error: "wheel target is outside the viewport. Use scroll_to to reveal it, or method 'dom' to scroll its container." };
+      }
+      x = (left + right) / 2;
+      y = (top + bottom) / 2;
+      var hit = document.elementFromPoint(x, y);
+      while (hit && hit.shadowRoot && hit !== el && !el.contains(hit)) {
+        var inner = hit.shadowRoot.elementFromPoint(x, y);
+        if (!inner || inner === hit) break;
+        hit = inner;
+      }
+      if (!hit || (hit !== el && !el.contains(hit))) {
+        return { error: "wheel target is obscured or clipped. Call snapshot() to inspect the page before continuing." };
+      }
+    }
+    return { x: x, y: y };
+  }
+  var inferContainer = !ref && (deltaX ? root.scrollWidth <= root.clientWidth : root.scrollHeight <= root.clientHeight);
+  if (inferContainer) el = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2) || root;
+  if (ref || inferContainer) {
+    // Choose the nearest container on the requested axis. At its boundary,
+    // report zero movement rather than silently scrolling a different parent.
+    while (el && el !== root) {
+      var style = getComputedStyle(el);
+      var overflow = deltaX ? style.overflowX : style.overflowY;
+      var canScroll = deltaX ? el.scrollWidth > el.clientWidth : el.scrollHeight > el.clientHeight;
+      if (canScroll && /^(auto|scroll|overlay)$/.test(overflow)) break;
+      el = el.parentElement || el.getRootNode().host;
+    }
+    el = el || root;
+  }
+  var before = { x: el.scrollLeft, y: el.scrollTop };
+  // Instant avoids waiting for rAF/smooth animations in background tabs.
+  el.scrollBy({ left: deltaX, top: deltaY, behavior: "instant" });
+  return { before: before, after: { x: el.scrollLeft, y: el.scrollTop } };
+})`;
+
+type ScrollProbe = { error: string } | { x: number; y: number } | {
+  before: { x: number; y: number }; after: { x: number; y: number };
 };
 
 class ScrollTool implements AnnotatedTool {
@@ -596,29 +665,38 @@ class ScrollTool implements AnnotatedTool {
   async run(call: ToolCall, ctx: ToolContext): Promise<ToolResult> {
     const parsed = parseInput(call);
     if (!parsed.ok) return err(call, parsed.error);
-    const direction = (String((parsed.input as Record<string, unknown>).direction ?? "down")) as "up" | "down" | "left" | "right";
-    const amount = Number((parsed.input as Record<string, unknown>).amount ?? 400);
-    let deltaX = 0, deltaY = 0;
-    switch (direction) {
-      case "up": deltaY = -amount; break;
-      case "down": deltaY = amount; break;
-      case "left": deltaX = -amount; break;
-      case "right": deltaX = amount; break;
-    }
     try {
-      // mouseWheel is the most reliable scroll primitive -- it dispatches a real
-      // wheel event that infinite-scroll and lazy-load listeners respond to,
-      // unlike window.scrollTo. The cursor x/y just need to be inside the
-      // viewport; center is a safe choice.
-      await ctx.cdp("Input.dispatchMouseEvent", {
-        type: "mouseWheel",
-        x: 400,
-        y: 400,
-        deltaX,
-        deltaY,
+      const input = validateExternalTool("scroll", parsed.input);
+      const direction = String(input.direction ?? "down");
+      const amount = Number(input.amount ?? 400);
+      if (amount === 0) return ok(call, "no movement; requested 0px.");
+      const method = String(input.method ?? "dom");
+      const ref = String(input.ref ?? "");
+      const deltaX = direction === "left" ? -amount : direction === "right" ? amount : 0;
+      const deltaY = direction === "up" ? -amount : direction === "down" ? amount : 0;
+      const probe = await ctx.cdp<{ result?: { value?: ScrollProbe } }>("Runtime.evaluate", {
+        expression: `${SCROLL_JS}(${JSON.stringify(ref)}, ${deltaX}, ${deltaY}, ${JSON.stringify(method)})`,
+        returnByValue: true,
       });
-      return ok(call, `scrolled ${direction} by ${amount}px`);
+      const value = probe?.result?.value;
+      if (!value) return err(call, "scroll failed: could not inspect the scroll target");
+      if ("error" in value) return err(call, `scroll failed: ${value.error}`);
+      if ("x" in value) {
+        await ctx.cdp("Input.dispatchMouseEvent", { type: "mouseWheel", x: value.x, y: value.y, deltaX, deltaY });
+        return ok(call, `sent wheel ${direction} by ${amount}px; movement is not confirmed. Call snapshot() to check the page.`);
+      }
+      const dx = value.after.x - value.before.x;
+      const dy = value.after.y - value.before.y;
+      const movement = dx !== 0 || dy !== 0
+        ? `scrolled ${direction}; actual delta (${dx}, ${dy})px`
+        : "no movement; target may be at a scroll boundary or not scrollable";
+      return ok(call, `${movement}; requested ${amount}px; position (${value.after.x}, ${value.after.y}).`, value);
     } catch (e) {
+      if (e instanceof CdpCommandTimeoutError && e.method === "Input.dispatchMouseEvent") {
+        return err(call, "wheel scroll timed out; completion is unknown. Do not repeat the wheel input automatically. " +
+          "Call snapshot() to check the page, then use scroll with method 'dom' if further scrolling is needed. " +
+          "The pairing may still be usable.");
+      }
       return err(call, `scroll failed: ${(e as Error).message}`);
     }
   }

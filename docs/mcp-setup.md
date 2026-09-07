@@ -237,6 +237,23 @@ It retains the latest 50 summaries while connected, including when you reopen
 the panel. **Waiting for the agent** means no browser call is currently running;
 the agent's conversation and model inference remain in its own client.
 
+### Scrolling long pages
+
+`tabagent_scroll` uses **DOM scrolling** by default: it moves the document's
+scroll position and reports the actual change, without waiting for mouse-wheel
+input. If the document has no scroll range, it uses a scrollable area at the
+viewport center. Pass a snapshot `ref` to choose its nearest scrollable container.
+For virtualized feeds, use modest `amount` values and take a fresh snapshot after
+each scroll; only the currently rendered content is available. A result showing
+no movement does not prove that the full feed has been collected.
+
+For controls that specifically need wheel events, use `method: "wheel"`.
+Wheel input targets the viewport center or the visible portion of the supplied
+`ref`; its acknowledgment does not confirm movement. If it times out while
+snapshots still work, check the page state and use `method: "dom"` for subsequent
+scrolling. Do not automatically replay uncertain input. Re-pair only if the tab's
+access has ended; a wheel timeout alone does not establish a frozen renderer.
+
 ## Stop, reconnect and share more tabs
 
 Click **Stop sharing** in the panel or ask the agent to call
@@ -266,6 +283,7 @@ across those conversations too.
 | `tabagent_tabs` returns an empty list | The server is reachable, but this companion owns no tabs. Pair from this agent session on your intended tab. |
 | Pairing fails | Get a fresh code; short codes expire after two minutes, work once and lock after five incorrect guesses. Keep the agent open and allow Chrome's local connection permission. The companion and Chrome must share the same computer and loopback network; a remote shell or separate container is a different environment. |
 | Tool call waits without page activity | Check the panel for an approval prompt. The companion revokes access after 90 seconds without completion; the 120-second client timeout does not extend that limit. |
+| Wheel scroll times out but snapshots still work | Inspect the current page, then use `tabagent_scroll` with `method: "dom"` (the default). For a nested scrolling area, supply a snapshot `ref` inside it. Avoid repeating an input whose completion is unknown. |
 | Every action asks again | Choose **Allow for this connection** in TabAgent when that is the permission you want. If the prompt appears in your agent application, check that application's tool approvals separately. |
 | Panel says it is waiting for the agent | Give the task in the agent's chat. If it selects another browser tool, explicitly ask it to use TabAgent. |
 | Connection disappears after idle or restart | Keep the companion alive (Pi: `lazy-keep-alive`). Re-pair after an agent restart, extension reload or Stop. |

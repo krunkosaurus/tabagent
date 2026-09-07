@@ -235,7 +235,7 @@ Eleven CDP-backed tools, defined in `src/tools/browser-tools.ts`:
 | `type` | Focus a `ref` and type text, with optional clear and submit |
 | `hover` | Move the mouse over a `ref` (tooltips, dropdown triggers) |
 | `press_key` | Press a key or combo (`Escape`, `Tab`, `ctrl+a`, …) |
-| `scroll` | Scroll the page by pixels in any direction |
+| `scroll` | Scroll the document or a `ref`'s scroll container by pixels, reporting actual movement; optional wheel input |
 | `scroll_to` | Scroll a `ref` element into view |
 | `navigate` | Go to a URL — requires explicit approval in Ask mode |
 | `screenshot` | Full-page JPEG, resized to fit a token budget |

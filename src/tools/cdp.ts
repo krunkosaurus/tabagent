@@ -12,7 +12,7 @@
  * keepalive mechanism the survival layer relies on.
  *
  * Resilience patterns (modeled after production extensions):
- *   - Per-command timeout via Promise.race. A frozen renderer previously hung
+ *   - Per-command timeout. A frozen renderer previously hung
  *     the entire agent loop; now each sendCommand is bounded.
  *   - Auto-reattach: if CDP reports "not attached" / "detached while handling",
  *     we transparently re-attach and retry the command once.
@@ -26,15 +26,16 @@ const ATTACH_TARGET = (tabId: number) => ({ tabId });
 const CDP_COMMAND_TIMEOUT_MS = 20_000;
 /** Attach timeout (ms). DevTools being open or a crashed renderer must surface. */
 const CDP_ATTACH_TIMEOUT_MS = 8_000;
-/** After this many CONSECUTIVE per-command timeouts on one tab, we treat the
- *  renderer as frozen and escalate the error to ask for a reload/restart,
- *  rather than letting every following command pile up its own 20s timeout. */
-const CDP_FREEZE_THRESHOLD = 3;
-
-/** tabId -> count of consecutive command timeouts. Reset to 0 on any success.
- *  Used to detect a frozen/hung renderer (which previously caused a cascade of
- *  timeouts that silently ended the agent run). */
-const consecutiveTimeouts = new Map<number, number>();
+/** A missing acknowledgement does not establish whether a command took effect
+ *  or whether the renderer is frozen (the input queue can stall independently). */
+export class CdpCommandTimeoutError extends Error {
+  constructor(readonly tabId: number, readonly method: string) {
+    super(`CDP sendCommand "${method}" timed out after ${CDP_COMMAND_TIMEOUT_MS}ms on tab ${tabId}. ` +
+      "Command completion is unknown. Check the page state before another action; do not automatically repeat input. " +
+      "Other commands may still work.");
+    this.name = "CdpCommandTimeoutError";
+  }
+}
 
 export interface CdpAttached {
   tabId: number;
@@ -156,25 +157,14 @@ export async function sendCommandOnce<T = unknown>(
     const timer = setTimeout(() => {
       if (done) return;
       done = true;
-      const count = (consecutiveTimeouts.get(tabId) ?? 0) + 1;
-      consecutiveTimeouts.set(tabId, count);
-      const frozen = count >= CDP_FREEZE_THRESHOLD;
-      reject(
-        new Error(
-          `CDP sendCommand "${method}" timed out after ${CDP_COMMAND_TIMEOUT_MS}ms on tab ${tabId}. ` +
-            (frozen
-              ? `The renderer appears FROZEN (${count} consecutive timeouts). ` +
-                `Reload the tab (or close & reopen it) and start a fresh session -- further commands on this tab will keep timing out.`
-              : `The renderer may be frozen or unresponsive.`),
-        ),
-      );
+      reject(new CdpCommandTimeoutError(tabId, method));
     }, CDP_COMMAND_TIMEOUT_MS);
     chrome.debugger.sendCommand(ATTACH_TARGET(tabId), method, params as object | undefined, (result) => {
+      // Consume late errors too, without settling an already timed-out call.
+      const le = chrome.runtime.lastError;
       if (done) return;
       done = true;
       clearTimeout(timer);
-      consecutiveTimeouts.delete(tabId); // a reply arrived: renderer is alive
-      const le = chrome.runtime.lastError;
       if (le) reject(new Error(le.message));
       else resolve(result as T);
     });

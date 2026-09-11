@@ -420,19 +420,18 @@ function finishStreaming(): void {
   if (text) text.remove();
   state.streamingText = "";
 
-  // The reasoning block graduates from a streaming bubble to a permanent
-  // collapsible block. It STAYS EXPANDED after the turn so the user can read
-  // the reasoning alongside the answer; they can collapse it manually. We only
-  // swap the live "thinking…" dots for a word-count summary.
+  // Keep completed thinking available to reopen, but collapse it by default
+  // so only the current stream stays expanded. Respect an explicit expand-all.
   const reasoning = $("streaming-reasoning");
   if (reasoning) {
     reasoning.removeAttribute("id");
     reasoning.classList.remove("streaming");
+    if (!blockStartsOpen(false)) reasoning.classList.remove("open");
     const dots = reasoning.querySelector(".thinking-dots");
     if (dots) dots.remove();
     const label = reasoning.querySelector(".collapse-label");
     if (label) label.textContent = "Thinking";
-    // Keep it open if it had content; drop entirely if empty.
+    // Keep the full text if it had content; drop entirely if empty.
     const content = state.streamingReasoning.trim();
     if (content) {
       const meta = reasoning.querySelector(".collapse-meta");
@@ -447,6 +446,7 @@ function finishStreaming(): void {
     }
   }
   state.streamingReasoning = "";
+  updateExpandAllBtn();
 }
 
 /**

@@ -30,6 +30,7 @@ function renderThinking(thinking: ChatThinking | undefined, reset: boolean): voi
 export function renderChat(next: ExternalState | null, follow?: boolean): void {
   const changed = next?.connectionId !== state?.connectionId;
   const thinkingChanged = changed || next?.chat?.thinking?.id !== state?.chat?.thinking?.id;
+  const thinkingFinished = !!state?.chat?.thinking?.active && !next?.chat?.thinking?.active;
   if (state?.chat?.attached && !next?.chat?.attached) el<HTMLTextAreaElement>("external-chat-input").value = "";
   if (changed) {
     el<HTMLTextAreaElement>("external-chat-input").value = "";
@@ -90,7 +91,7 @@ export function renderChat(next: ExternalState | null, follow?: boolean): void {
       renderedText.set(content, message.text);
     }
   }
-  renderThinking(thinking, thinkingChanged);
+  renderThinking(thinking, thinkingChanged || thinkingFinished);
   if (followMessages) scroll.scrollTop = scroll.scrollHeight;
 }
 

@@ -175,9 +175,13 @@ try {
   pi.release();
   await until(() => a.panel.locator('#external-chat-send').isEnabled(), 'thinking completed');
   assert.equal(await a.panel.locator('#external-chat-thinking-label').textContent(), 'Thoughts');
-  assert.equal(await thinking.evaluate((node) => node.open), true, 'completion keeps the user’s expanded view');
+  assert.equal(await thinking.evaluate((node) => node.open), false, 'completed thinking collapses');
+  await thinking.locator('summary').click();
+  await a.panel.locator('#external-view-activity').click();
+  await a.panel.locator('#external-view-chat').click();
+  assert.equal(await thinkingBody.isVisible(), true, 'completed thinking can be reopened and stays open across renders');
   assert((await thinkingBody.textContent()).includes('LATEST_THOUGHT'));
-  console.log('PASS: thinking stays on one live line, expands safely, respects reading position, restores collapsed and stays private to its tab');
+  console.log('PASS: thinking stays on one live line, expands safely, collapses on completion, can be reopened and stays private to its tab');
 
   // The actual model calls the registered Pi tool; approvals still belong to Chrome.
   pi.plans.push({ text: 'Reading the page', tool: { name: 'tabagent_snapshot', args: { tabId: a.tabId } } }, { text: 'I read the page.' });
